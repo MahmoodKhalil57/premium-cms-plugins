@@ -8,7 +8,8 @@ set -euo pipefail
 OP="${1:-bundle}"; LIST="${2:-}"
 URL="${PLATFORM_URL:-https://premium-cms.com}/_emdash/api/plugins/premium-platform/fleet/sync"
 [ -n "${DEPLOY_KEY:-}" ] || { echo "DEPLOY_KEY is not set"; exit 1; }
-after=""; total=0; failed=0
+run_op() {
+OP="$1"; after=""; failed=0
 while :; do
   body=$(python3 -c "
 import json,sys,os
@@ -36,3 +37,6 @@ open('/tmp/fleet-failed','w').write(str(len(data.get('failed', []))))
 done
 echo "fleet sync ($OP) finished; failed projects: $failed"
 [ "$failed" = "0" ]
+}
+# A bundle rollout is two passes (deploy, then setup) so each call stays inside the plugin's wall time.
+if [ "$OP" = "bundle" ]; then run_op deploy && run_op setup; else run_op "$OP"; fi

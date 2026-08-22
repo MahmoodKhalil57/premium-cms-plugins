@@ -336,7 +336,8 @@ export { deleteChildSecret };
 /**
  * Apply a platform-wide change to every live project, a batch at a time so a
  * single call stays inside the sandbox wall time. CI loops until remaining = 0.
- *   op "bundle"  → redeploy on the latest published bundle + setup
+ *   op "deploy"  → redeploy on the latest published bundle;  op "setup" → run setup (migrations, seed)
+ *   op "bundle"  → both in one call (small fleets only; each step can take a minute)
  *   op "plugins" → update installed marketplace plugins on each project (+ install)
  *   op "themes"  → re-apply the theme seed (projects on the given theme ids, or all with a theme)
  * Auth: the DEPLOY_KEY plugin setting (same as billing/event).
@@ -355,7 +356,13 @@ export async function fleetSync(ctx: RouteContext<{ key?: string; op?: string; p
 	const failed: Array<{ id: string; error: string }> = [];
 	for (const p of batch) {
 		try {
-			if (op === "bundle") {
+			if (op === "deploy") {
+				const r = await deployWorker(ctx, env, p.id);
+				done.push({ id: p.id, result: { status: r.status, bundle: r.bundle_version } });
+			} else if (op === "setup") {
+				const r = await setupCms(ctx, p.id);
+				done.push({ id: p.id, result: { status: r.project.status, bundle: r.project.bundle_version } });
+			} else if (op === "bundle") {
 				await deployWorker(ctx, env, p.id);
 				const r = await setupCms(ctx, p.id);
 				done.push({ id: p.id, result: { status: r.project.status, bundle: r.project.bundle_version } });
