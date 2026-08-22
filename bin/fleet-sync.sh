@@ -13,7 +13,7 @@ while :; do
   body=$(python3 -c "
 import json,sys,os
 op, lst, after = sys.argv[1:4]
-b = {'key': os.environ['DEPLOY_KEY'], 'op': op, 'limit': 3}
+b = {'key': os.environ['DEPLOY_KEY'], 'op': op, 'limit': 3 if op == 'plugins' else 1}
 if after: b['after'] = after
 items = [x for x in lst.split(',') if x]
 if items: b['install' if op == 'plugins' else 'themes'] = items

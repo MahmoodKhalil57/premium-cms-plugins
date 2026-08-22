@@ -345,7 +345,8 @@ export async function fleetSync(ctx: RouteContext<{ key?: string; op?: string; p
 	const env = await loadEnv(ctx);
 	if (!env.DEPLOY_KEY || ctx.input.key !== env.DEPLOY_KEY) throw PluginRouteError.forbidden("unauthorized");
 	const op = ctx.input.op ?? "bundle";
-	const limit = Math.min(10, Math.max(1, ctx.input.limit ?? 3));
+	// Deploy+setup and theme seeding take up to a minute each; keep a call inside the 120 s sandbox wall time.
+	const limit = Math.min(op === "plugins" ? 10 : 2, Math.max(1, ctx.input.limit ?? (op === "plugins" ? 3 : 1)));
 	const all = (await listProjects(ctx)).filter((p) => p.status === "live" && p.provision_secret).sort((a, b) => a.id.localeCompare(b.id));
 	const wanted = all.filter((p) => (!ctx.input.projects?.length || ctx.input.projects.includes(p.id)) && (op !== "themes" || (ctx.input.themes?.length ? ctx.input.themes.includes(p.theme_id ?? "") : Boolean(p.theme_id))));
 	const pending = ctx.input.after ? wanted.filter((p) => p.id > ctx.input.after!) : wanted;
