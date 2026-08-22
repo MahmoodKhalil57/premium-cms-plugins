@@ -19,7 +19,13 @@ if after: b['after'] = after
 items = [x for x in lst.split(',') if x]
 if items: b['install' if op == 'plugins' else 'themes'] = items
 print(json.dumps(b))" "$OP" "$LIST" "$after")
-  res=$(curl -sS --max-time 300 -X POST "$URL" -H "Content-Type: application/json" -H "X-EmDash-Request: 1" -d "$body")
+  attempt=0
+  while :; do
+    res=$(curl -sS --max-time 300 -X POST "$URL" -H "Content-Type: application/json" -H "X-EmDash-Request: 1" -d "$body")
+    # A cold platform isolate can exceed its wall time on the first heavy call; the ops are idempotent, so retry.
+    if echo "$res" | grep -q "wall-time limit" && [ $attempt -lt 3 ]; then attempt=$((attempt+1)); echo "  wall-time hit — retrying ($attempt)"; sleep 15; continue; fi
+    break
+  done
   python3 -c "
 import json,sys
 d=json.loads(sys.argv[1]); data=d.get('data') or {}
