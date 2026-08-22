@@ -17,6 +17,9 @@ build_one() {
 	(cd "$ROOT" && bun -e '
 import { pluginManifestSchema } from "emdash";
 const m = JSON.parse(await Bun.file(process.argv[1]).text());
+// The published schema predates plugin-grant permissions (<pluginId>:<grant>), which the
+// PremiumCMS image accepts; map them to a built-in permission for this structural check only.
+for (const route of m.routes ?? []) if (typeof route.permission === "string" && route.permission.startsWith(`${m.id}:`)) route.permission = "settings:manage";
 const r = pluginManifestSchema.safeParse(m);
 if (!r.success) { console.error("manifest INVALID:", JSON.stringify(r.error.issues, null, 1)); process.exit(1); }
 console.log("built", r.data.id, r.data.version, "| routes:", r.data.routes.length, "| hooks:", r.data.hooks.length, "| backend", (await Bun.file(process.argv[2]).size / 1024).toFixed(0) + " KB");
