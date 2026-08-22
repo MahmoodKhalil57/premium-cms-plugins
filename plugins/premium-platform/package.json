@@ -1,0 +1,15 @@
+{
+	"name": "premium-platform",
+	"version": "1.7.3",
+	"private": true,
+	"type": "module",
+	"description": "PremiumCMS provider control plane \u2014 provisions isolated sibling instances, custom domains, branded email and GitHub frontends. Sandboxed, marketplace-installable (hidden listing).",
+	"exports": {
+		".": "./src/index.ts",
+		"./sandbox": "./src/sandbox-entry.ts"
+	},
+	"scripts": {
+		"build": "bash ../../bin/build.sh premium-platform"
+	},
+	"dependencies": {}
+}

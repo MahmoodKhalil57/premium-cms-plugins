@@ -1,0 +1,184 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"title": "Design studio configuration",
+	"type": "object",
+	"description": "Print areas the customer designs on, artwork they can place, and what the studio allows.",
+	"required": [
+		"areas"
+	],
+	"properties": {
+		"areas": {
+			"type": "array",
+			"title": "Print areas",
+			"minItems": 1,
+			"items": {
+				"type": "object",
+				"title": "Print area",
+				"x-itemTitle": "label",
+				"required": [
+					"id",
+					"label",
+					"width",
+					"height"
+				],
+				"properties": {
+					"id": {
+						"type": "string",
+						"title": "ID",
+						"description": "Short key, e.g. front",
+						"x-ui": {
+							"order": 0
+						}
+					},
+					"label": {
+						"type": "string",
+						"title": "Label",
+						"x-ui": {
+							"order": 1
+						}
+					},
+					"width": {
+						"type": "integer",
+						"title": "Width (design units)",
+						"minimum": 1,
+						"maximum": 4000
+					},
+					"height": {
+						"type": "integer",
+						"title": "Height (design units)",
+						"minimum": 1,
+						"maximum": 4000
+					},
+					"previewImage": {
+						"type": "string",
+						"format": "uri",
+						"title": "Mockup image URL",
+						"description": "Garment photo shown under the print area"
+					},
+					"printBox": {
+						"type": "object",
+						"title": "Print box on the mockup (%)",
+						"x-ui": {
+							"collapsed": false
+						},
+						"properties": {
+							"x": {
+								"type": "number",
+								"title": "Left %",
+								"minimum": 0,
+								"maximum": 100
+							},
+							"y": {
+								"type": "number",
+								"title": "Top %",
+								"minimum": 0,
+								"maximum": 100
+							},
+							"w": {
+								"type": "number",
+								"title": "Width %",
+								"minimum": 1,
+								"maximum": 100
+							},
+							"h": {
+								"type": "number",
+								"title": "Height %",
+								"minimum": 1,
+								"maximum": 100
+							}
+						}
+					}
+				}
+			}
+		},
+		"presets": {
+			"type": "array",
+			"title": "Preset artwork",
+			"items": {
+				"type": "object",
+				"title": "Artwork",
+				"x-itemTitle": "label",
+				"required": [
+					"id",
+					"label",
+					"image"
+				],
+				"properties": {
+					"id": {
+						"type": "string",
+						"title": "ID"
+					},
+					"label": {
+						"type": "string",
+						"title": "Label"
+					},
+					"image": {
+						"type": "string",
+						"format": "uri",
+						"title": "Image URL"
+					},
+					"priceDelta": {
+						"type": "number",
+						"title": "Price added when used"
+					}
+				}
+			}
+		},
+		"allowText": {
+			"type": "boolean",
+			"title": "Allow text",
+			"default": true
+		},
+		"allowUpload": {
+			"type": "boolean",
+			"title": "Allow customer images",
+			"default": true
+		},
+		"allowShapes": {
+			"type": "boolean",
+			"title": "Allow shapes",
+			"default": true
+		},
+		"fonts": {
+			"type": "array",
+			"title": "Fonts",
+			"items": {
+				"type": "string"
+			},
+			"x-ui": {
+				"widget": "chips",
+				"placeholder": "Inter, Arial, Impact\u2026"
+			}
+		},
+		"colors": {
+			"type": "array",
+			"title": "Colour swatches",
+			"items": {
+				"type": "string"
+			},
+			"x-ui": {
+				"widget": "chips",
+				"placeholder": "#111111, #ffffff\u2026"
+			}
+		},
+		"maxLayers": {
+			"type": "integer",
+			"title": "Max layers",
+			"minimum": 1,
+			"maximum": 12
+		},
+		"uploadMaxBytes": {
+			"type": "integer",
+			"title": "Max upload size (bytes)",
+			"minimum": 1
+		},
+		"textPriceDelta": {
+			"type": "number",
+			"title": "Price added for text"
+		},
+		"uploadPriceDelta": {
+			"type": "number",
+			"title": "Price added for a customer image"
+		}
+	}
+}

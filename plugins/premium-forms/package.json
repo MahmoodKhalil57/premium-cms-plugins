@@ -1,0 +1,17 @@
+{
+	"name": "premium-forms",
+	"version": "0.4.1",
+	"private": true,
+	"type": "module",
+	"description": "Forms for PremiumCMS sites \u2014 sandboxed, marketplace-installable port of emdash-forms (MIT).",
+	"exports": {
+		".": "./src/index.ts",
+		"./sandbox": "./src/sandbox-entry.ts"
+	},
+	"scripts": {
+		"build": "bash ../../bin/build.sh premium-forms"
+	},
+	"dependencies": {
+		"ulidx": "^2.4.1"
+	}
+}

@@ -1,0 +1,52 @@
+name: Build, publish and roll out plugins
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile || bun install
+      - name: Typecheck
+        run: bash bin/check.sh
+      - name: Build every plugin
+        run: bash bin/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-bundles
+          path: dist/
+          retention-days: 14
+
+  publish:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: marketplace
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: plugin-bundles
+          path: dist/
+      - name: Publish to the marketplace (and prune removed plugins)
+        env:
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          ARTIFACTS_PUBLISH_TOKEN: ${{ secrets.ARTIFACTS_PUBLISH_TOKEN }}
+        run: bash bin/publish.sh --all --prune
+      - name: Update every project to the new versions
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+          PLATFORM_URL: ${{ vars.PLATFORM_URL || 'https://premium-cms.com' }}
+        run: bash bin/fleet-sync.sh plugins

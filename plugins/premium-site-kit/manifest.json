@@ -1,0 +1,44 @@
+{
+	"id": "premium-site-kit",
+	"version": "0.1.2",
+	"capabilities": ["network:request"],
+	"allowedHosts": ["maps.googleapis.com"],
+	"storage": {},
+	"hooks": [{ "name": "plugin:activate" }, { "name": "cron" }],
+	"routes": [
+		{ "name": "config", "public": true, "cacheControl": "public, max-age=60" },
+		{ "name": "reviews", "public": true, "cacheControl": "public, max-age=300" },
+		{ "name": "reviews/refresh", "permission": "settings:manage" }
+	],
+	"admin": {
+		"settingsSchema": {
+			"businessType": { "type": "select", "label": "Business type (schema.org)", "default": "LocalBusiness", "options": [{ "value": "LocalBusiness", "label": "Local business" }, { "value": "Dentist", "label": "Dentist" }, { "value": "MedicalClinic", "label": "Medical clinic" }, { "value": "Physician", "label": "Physician" }, { "value": "BeautySalon", "label": "Beauty salon" }, { "value": "HairSalon", "label": "Hair salon" }, { "value": "Store", "label": "Shop" }, { "value": "Restaurant", "label": "Restaurant" }, { "value": "ProfessionalService", "label": "Professional service" }, { "value": "Organization", "label": "Organisation" }] },
+			"businessName": { "type": "string", "label": "Business name", "description": "Defaults to the site title." },
+			"phone": { "type": "string", "label": "Phone" },
+			"email": { "type": "string", "label": "Public email" },
+			"streetAddress": { "type": "string", "label": "Street address" },
+			"locality": { "type": "string", "label": "Town / city" },
+			"region": { "type": "string", "label": "Region / county" },
+			"postalCode": { "type": "string", "label": "Postcode" },
+			"country": { "type": "string", "label": "Country (2-letter)", "description": "e.g. GB" },
+			"latitude": { "type": "string", "label": "Latitude" },
+			"longitude": { "type": "string", "label": "Longitude" },
+			"openingHours": { "type": "string", "label": "Opening hours", "description": "schema.org format, comma-separated: Mo-Fr 09:00-17:00, Sa 09:00-13:00" },
+			"priceRange": { "type": "string", "label": "Price range", "description": "e.g. ££" },
+			"sameAs": { "type": "string", "label": "Profiles (comma-separated URLs)", "description": "Google Business Profile, Instagram, Facebook …" },
+			"logoUrl": { "type": "string", "label": "Logo URL" },
+			"imageUrl": { "type": "string", "label": "Cover image URL" },
+			"ga4Id": { "type": "string", "label": "Google Analytics 4 measurement id", "description": "G-XXXXXXXXXX. Loaded only after analytics consent when the banner is on." },
+			"gtmId": { "type": "string", "label": "Google Tag Manager container id", "description": "GTM-XXXXXXX" },
+			"cfBeaconToken": { "type": "string", "label": "Cloudflare Web Analytics token", "description": "Privacy-friendly, no consent needed." },
+			"searchConsoleToken": { "type": "string", "label": "Google Search Console verification token", "description": "Content of the google-site-verification meta tag." },
+			"consentEnabled": { "type": "boolean", "label": "Cookie consent banner", "description": "UK GDPR / PECR: analytics and marketing tags wait for consent. Choices are remembered per visitor." },
+			"consentTitle": { "type": "string", "label": "Banner title", "default": "We use cookies" },
+			"consentText": { "type": "string", "label": "Banner text", "default": "We use essential cookies to make the site work and, with your consent, analytics cookies to understand how it is used." },
+			"privacyUrl": { "type": "string", "label": "Privacy policy URL", "default": "/privacy" },
+			"googlePlacesApiKey": { "type": "secret", "label": "Google Places API key", "description": "For the live Google reviews block (Places API enabled on the key)." },
+			"googlePlaceId": { "type": "string", "label": "Google Place ID", "description": "Find it at developers.google.com/maps/documentation/places/web-service/place-id" },
+			"reviewsMinRating": { "type": "number", "label": "Only show reviews rated at least", "default": 4 }
+		}
+	}
+}

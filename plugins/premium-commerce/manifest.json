@@ -1,0 +1,985 @@
+{
+	"id": "premium-commerce",
+	"version": "0.9.9",
+	"capabilities": [
+		"content:read",
+		"email:send",
+		"media:read",
+		"media:write",
+		"network:request"
+	],
+	"allowedHosts": [
+		"api.polar.sh",
+		"api.stripe.com",
+		"api.printnode.com"
+	],
+	"storage": {
+		"orders": {
+			"indexes": [
+				"status",
+				"createdAt",
+				"paymentMethod",
+				"email",
+				"number",
+				"expiresAt",
+				[
+					"status",
+					"createdAt"
+				],
+				"userId"
+			],
+			"uniqueIndexes": [
+				"sessionId"
+			]
+		},
+		"inventory": {
+			"indexes": [
+				"updatedAt"
+			]
+		},
+		"carts": {
+			"indexes": [
+				"userId",
+				"token",
+				"status",
+				"updatedAt",
+				[
+					"status",
+					"updatedAt"
+				]
+			]
+		},
+		"customers": {
+			"indexes": [
+				"email",
+				"updatedAt"
+			]
+		},
+		"transactions": {
+			"indexes": [
+				"orderId",
+				"provider",
+				"kind",
+				"createdAt",
+				"providerRef"
+			]
+		},
+		"discounts": {
+			"indexes": [
+				"code",
+				"active",
+				"updatedAt",
+				"endsAt"
+			]
+		},
+		"services": {
+			"indexes": [
+				"slug",
+				"active",
+				"sortOrder"
+			]
+		},
+		"staff": {
+			"indexes": [
+				"active",
+				"name"
+			]
+		},
+		"bookings": {
+			"indexes": [
+				"status",
+				"startsAt",
+				"serviceId",
+				"staffId",
+				"orderId",
+				[
+					"status",
+					"startsAt"
+				]
+			]
+		},
+		"automations": {
+			"indexes": [
+				"active",
+				"trigger"
+			]
+		},
+		"tables": {
+			"indexes": [
+				"code",
+				"active"
+			],
+			"uniqueIndexes": [
+				"code"
+			]
+		},
+		"tickets": {
+			"indexes": [
+				"orderId",
+				"status",
+				"station",
+				"createdAt",
+				[
+					"status",
+					"station"
+				]
+			]
+		},
+		"printJobs": {
+			"indexes": [
+				"status",
+				"printerId",
+				"createdAt",
+				[
+					"printerId",
+					"status"
+				]
+			]
+		},
+		"printers": {
+			"indexes": [
+				"active",
+				"target"
+			]
+		},
+		"shifts": {
+			"indexes": [
+				"staffId",
+				"status",
+				"openedAt"
+			]
+		},
+		"reservations": {
+			"indexes": [
+				"status",
+				"at",
+				"tableId",
+				"email",
+				[
+					"status",
+					"at"
+				]
+			]
+		}
+	},
+	"hooks": [
+		{
+			"name": "plugin:activate"
+		},
+		{
+			"name": "cron"
+		}
+	],
+	"routes": [
+		{
+			"name": "catalog",
+			"public": true,
+			"cacheControl": "public, max-age=30"
+		},
+		{
+			"name": "availability",
+			"public": true
+		},
+		{
+			"name": "checkout",
+			"public": true
+		},
+		{
+			"name": "confirm",
+			"public": true
+		},
+		{
+			"name": "webhook",
+			"public": true
+		},
+		{
+			"name": "order",
+			"public": true
+		},
+		{
+			"name": "upload",
+			"public": true
+		},
+		{
+			"name": "admin",
+			"permission": "premium-commerce:orders:read"
+		},
+		{
+			"name": "orders/list",
+			"permission": "premium-commerce:orders:read"
+		},
+		{
+			"name": "orders/get",
+			"permission": "premium-commerce:orders:read"
+		},
+		{
+			"name": "orders/update",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "orders/refund",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "orders/export",
+			"permission": "premium-commerce:orders:read"
+		},
+		{
+			"name": "inventory/list",
+			"permission": "premium-commerce:orders:read"
+		},
+		{
+			"name": "inventory/adjust",
+			"permission": "premium-commerce:inventory:manage"
+		},
+		{
+			"name": "stats",
+			"permission": "premium-commerce:orders:read"
+		},
+		{
+			"name": "orders/design",
+			"permission": "premium-commerce:orders:read"
+		},
+		{
+			"name": "account/get",
+			"session": true
+		},
+		{
+			"name": "account/address-save",
+			"session": true
+		},
+		{
+			"name": "account/address-delete",
+			"session": true
+		},
+		{
+			"name": "account/payment-method-delete",
+			"session": true
+		},
+		{
+			"name": "account/portal",
+			"session": true
+		},
+		{
+			"name": "account/orders",
+			"session": true
+		},
+		{
+			"name": "cart/get",
+			"session": true
+		},
+		{
+			"name": "cart/save",
+			"session": true
+		},
+		{
+			"name": "checkout/account",
+			"session": true
+		},
+		{
+			"name": "cart/guest",
+			"public": true
+		},
+		{
+			"name": "customers/list",
+			"permission": "premium-commerce:orders:read"
+		},
+		{
+			"name": "carts/list",
+			"permission": "premium-commerce:orders:read"
+		},
+		{
+			"name": "transactions/list",
+			"permission": "premium-commerce:orders:read"
+		},
+		{
+			"name": "discounts/preview",
+			"public": true
+		},
+		{
+			"name": "discounts/list",
+			"permission": "premium-commerce:orders:read"
+		},
+		{
+			"name": "discounts/save",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "discounts/delete",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "bookings/services",
+			"public": true,
+			"cacheControl": "public, max-age=30"
+		},
+		{
+			"name": "bookings/availability",
+			"public": true
+		},
+		{
+			"name": "bookings/days",
+			"public": true
+		},
+		{
+			"name": "bookings/hold",
+			"public": true
+		},
+		{
+			"name": "bookings/lookup",
+			"public": true
+		},
+		{
+			"name": "bookings/cancel",
+			"public": true
+		},
+		{
+			"name": "account/bookings",
+			"session": true
+		},
+		{
+			"name": "bookings/list",
+			"permission": "premium-commerce:orders:read"
+		},
+		{
+			"name": "bookings/update",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "services/list",
+			"permission": "premium-commerce:orders:read"
+		},
+		{
+			"name": "services/save",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "services/delete",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "staff/list",
+			"permission": "premium-commerce:orders:read"
+		},
+		{
+			"name": "staff/save",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "staff/delete",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "automations/list",
+			"permission": "premium-commerce:orders:read"
+		},
+		{
+			"name": "automations/save",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "automations/delete",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "automations/run",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "orders/collect-balance",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "restaurant/config",
+			"public": true
+		},
+		{
+			"name": "restaurant/menu",
+			"public": true
+		},
+		{
+			"name": "restaurant/slots",
+			"public": true
+		},
+		{
+			"name": "restaurant/zone",
+			"public": true
+		},
+		{
+			"name": "restaurant/table",
+			"public": true
+		},
+		{
+			"name": "restaurant/track",
+			"public": true
+		},
+		{
+			"name": "staff/login",
+			"public": true
+		},
+		{
+			"name": "staff/logout",
+			"public": true
+		},
+		{
+			"name": "staff/me",
+			"public": true
+		},
+		{
+			"name": "pos/menu",
+			"public": true
+		},
+		{
+			"name": "pos/orders",
+			"public": true
+		},
+		{
+			"name": "pos/order",
+			"public": true
+		},
+		{
+			"name": "pos/pay",
+			"public": true
+		},
+		{
+			"name": "pos/void",
+			"public": true
+		},
+		{
+			"name": "pos/shift",
+			"public": true
+		},
+		{
+			"name": "pos/shift/open",
+			"public": true
+		},
+		{
+			"name": "pos/shift/close",
+			"public": true
+		},
+		{
+			"name": "pos/shift/movement",
+			"public": true
+		},
+		{
+			"name": "pos/dispatch",
+			"public": true
+		},
+		{
+			"name": "kds/tickets",
+			"public": true
+		},
+		{
+			"name": "kds/bump",
+			"public": true
+		},
+		{
+			"name": "print/jobs",
+			"public": true
+		},
+		{
+			"name": "print/ack",
+			"public": true
+		},
+		{
+			"name": "reservations/availability",
+			"public": true
+		},
+		{
+			"name": "reservations/create",
+			"public": true
+		},
+		{
+			"name": "reservations/lookup",
+			"public": true
+		},
+		{
+			"name": "reservations/cancel",
+			"public": true
+		},
+		{
+			"name": "tables/list",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "tables/save",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "tables/delete",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "printers/list",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "printers/save",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "printers/delete",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "print/test",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "shifts/list",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "reservations/list",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "reservations/update",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "restaurant/board",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "restaurant/order-status",
+			"permission": "premium-commerce:orders:manage"
+		},
+		{
+			"name": "staff/set-pin",
+			"permission": "premium-commerce:orders:manage"
+		}
+	],
+	"admin": {
+		"pages": [
+			{
+				"path": "/",
+				"label": "Orders",
+				"icon": "list"
+			},
+			{
+				"path": "/inventory",
+				"label": "Inventory",
+				"icon": "database"
+			},
+			{
+				"path": "/discounts",
+				"label": "Discounts",
+				"icon": "tag"
+			},
+			{
+				"path": "/bookings",
+				"label": "Bookings",
+				"icon": "calendar"
+			},
+			{
+				"path": "/services",
+				"label": "Treatments & staff",
+				"icon": "users"
+			},
+			{
+				"path": "/automations",
+				"label": "Automations",
+				"icon": "lightning"
+			},
+			{
+				"path": "/restaurant",
+				"label": "Restaurant",
+				"icon": "grid"
+			}
+		],
+		"widgets": [
+			{
+				"id": "sales",
+				"title": "Sales",
+				"size": "half"
+			}
+		],
+		"settingsSchema": {
+			"paymentProvider": {
+				"type": "select",
+				"label": "Payment provider",
+				"description": "Who charges your customers at checkout. Pay-later orders work without one.",
+				"default": "none",
+				"options": [
+					{
+						"value": "none",
+						"label": "None (pay-later orders only)"
+					},
+					{
+						"value": "stripe",
+						"label": "Stripe"
+					},
+					{
+						"value": "polar",
+						"label": "Polar"
+					}
+				]
+			},
+			"currency": {
+				"type": "string",
+				"label": "Currency",
+				"description": "ISO code, e.g. usd, eur, gbp, aed. Prices in the Products collection are in this currency."
+			},
+			"stripeSecretKey": {
+				"type": "secret",
+				"label": "Stripe secret key",
+				"description": "sk_live_\u2026 or sk_test_\u2026. Checkout, refunds and payment verification use it; it never leaves the server.",
+				"showWhen": {
+					"field": "paymentProvider",
+					"equals": "stripe"
+				}
+			},
+			"stripeWebhookSecret": {
+				"type": "secret",
+				"label": "Stripe webhook signing secret",
+				"description": "whsec_\u2026 of the webhook endpoint you create at dashboard.stripe.com/webhooks for the URL below (events: checkout.session.completed, checkout.session.async_payment_succeeded, checkout.session.async_payment_failed, checkout.session.expired).",
+				"showWhen": {
+					"field": "paymentProvider",
+					"equals": "stripe"
+				}
+			},
+			"stripeWebhookUrl": {
+				"type": "info",
+				"label": "Stripe webhook URL",
+				"description": "Add this endpoint in Stripe \u2192 Developers \u2192 Webhooks.",
+				"value": "{{origin}}/commerce-webhook/stripe",
+				"showWhen": {
+					"field": "paymentProvider",
+					"equals": "stripe"
+				}
+			},
+			"automaticTax": {
+				"type": "boolean",
+				"label": "Stripe Tax (automatic tax calculation)",
+				"showWhen": {
+					"field": "paymentProvider",
+					"equals": "stripe"
+				}
+			},
+			"shippingRates": {
+				"type": "string",
+				"label": "Stripe shipping rate ids",
+				"description": "Comma-separated shr_\u2026 ids offered at checkout for physical products.",
+				"showWhen": {
+					"field": "paymentProvider",
+					"equals": "stripe"
+				}
+			},
+			"polarAccessToken": {
+				"type": "secret",
+				"label": "Polar organization access token",
+				"description": "polar_oat_\u2026 with checkouts:read, checkouts:write, orders:read and refunds:write scopes.",
+				"showWhen": {
+					"field": "paymentProvider",
+					"equals": "polar"
+				}
+			},
+			"polarProductId": {
+				"type": "string",
+				"label": "Polar product ID",
+				"description": "A \"pay what you want\" product in your Polar organization, priced in the store currency; each checkout charges the order total against it.",
+				"showWhen": {
+					"field": "paymentProvider",
+					"equals": "polar"
+				}
+			},
+			"polarWebhookSecret": {
+				"type": "secret",
+				"label": "Polar webhook secret",
+				"description": "Secret of the webhook endpoint you create in Polar \u2192 Settings \u2192 Webhooks for the URL below (events: checkout.updated, order.created).",
+				"showWhen": {
+					"field": "paymentProvider",
+					"equals": "polar"
+				}
+			},
+			"polarWebhookUrl": {
+				"type": "info",
+				"label": "Polar webhook URL",
+				"description": "Add this endpoint in Polar \u2192 Settings \u2192 Webhooks.",
+				"value": "{{origin}}/commerce-webhook/polar",
+				"showWhen": {
+					"field": "paymentProvider",
+					"equals": "polar"
+				}
+			},
+			"allowManualPayment": {
+				"type": "boolean",
+				"label": "Allow pay-later orders",
+				"description": "Customers can place an order without paying online (bank transfer, cash on delivery); you confirm payment in Orders."
+			},
+			"customerAccounts": {
+				"type": "boolean",
+				"label": "Customer accounts",
+				"description": "Shoppers can sign in with an email link to save addresses, reuse saved cards (vaulted by Stripe/Polar \u2014 never stored here) and see their orders."
+			},
+			"notifyEmail": {
+				"type": "string",
+				"label": "Notify this email on new orders"
+			},
+			"storeName": {
+				"type": "string",
+				"label": "Store name (used in emails)"
+			},
+			"shippingCountries": {
+				"type": "string",
+				"label": "Ship to countries",
+				"description": "Comma-separated ISO country codes for the shipping address form. Leave empty for a broad default list."
+			},
+			"allowPromotionCodes": {
+				"type": "boolean",
+				"label": "Allow promotion codes at checkout"
+			},
+			"collectPhone": {
+				"type": "boolean",
+				"label": "Collect phone number at checkout",
+				"showWhen": {
+					"field": "paymentProvider",
+					"equals": "stripe"
+				}
+			},
+			"successPath": {
+				"type": "string",
+				"label": "Success page path",
+				"description": "Default /checkout/success (served by the frontend template)."
+			},
+			"cancelPath": {
+				"type": "string",
+				"label": "Cancel page path",
+				"description": "Default /cart."
+			},
+			"bookingTimezone": {
+				"type": "string",
+				"label": "Bookings: time zone",
+				"description": "IANA zone the practice works in, e.g. Europe/London. Slots and reminders use it."
+			},
+			"slotIntervalMin": {
+				"type": "number",
+				"label": "Bookings: slot interval (minutes)",
+				"description": "Start times offered every N minutes (default 15)."
+			},
+			"leadTimeHours": {
+				"type": "number",
+				"label": "Bookings: minimum notice (hours)",
+				"description": "How far ahead a slot must be to be bookable or cancelled online (default 2)."
+			},
+			"horizonDays": {
+				"type": "number",
+				"label": "Bookings: how far ahead (days)",
+				"description": "Default 60."
+			},
+			"holdMinutes": {
+				"type": "number",
+				"label": "Bookings: hold while paying (minutes)",
+				"description": "A chosen slot is reserved this long until payment completes (default 15)."
+			},
+			"restaurantMode": {
+				"type": "boolean",
+				"label": "Restaurant mode",
+				"description": "Turns the checkout into an order flow with delivery / pickup / dine-in, kitchen tickets, POS and printing.",
+				"default": false
+			},
+			"fulfilmentModes": {
+				"type": "string",
+				"label": "Order types offered",
+				"description": "Comma-separated: delivery, pickup, dine_in",
+				"default": "delivery, pickup, dine_in",
+				"showWhen": {
+					"field": "restaurantMode",
+					"equals": true
+				}
+			},
+			"openingHours": {
+				"type": "string",
+				"label": "Opening hours",
+				"description": "One rule per line or separated by ';'. Example: mon-thu 11:30-22:00; fri-sat 11:30-23:30; sun 12:00-21:00. Times use the booking time zone.",
+				"default": "mon-sun 11:30-22:00",
+				"showWhen": {
+					"field": "restaurantMode",
+					"equals": true
+				}
+			},
+			"prepTimeMin": {
+				"type": "number",
+				"label": "Kitchen prep time (minutes)",
+				"default": 25,
+				"showWhen": {
+					"field": "restaurantMode",
+					"equals": true
+				}
+			},
+			"pickupLeadMin": {
+				"type": "number",
+				"label": "Pickup lead time (minutes)",
+				"default": 20,
+				"showWhen": {
+					"field": "restaurantMode",
+					"equals": true
+				}
+			},
+			"orderSlotIntervalMin": {
+				"type": "number",
+				"label": "Order time-slot interval (minutes)",
+				"default": 15,
+				"showWhen": {
+					"field": "restaurantMode",
+					"equals": true
+				}
+			},
+			"maxOrdersPerSlot": {
+				"type": "number",
+				"label": "Max orders per slot (0 = unlimited)",
+				"default": 0,
+				"showWhen": {
+					"field": "restaurantMode",
+					"equals": true
+				}
+			},
+			"deliveryZones": {
+				"type": "string",
+				"label": "Delivery zones",
+				"description": "One zone per line: Name | postcode prefixes | fee | minimum order | minutes. Example: Central | W1, WC1, WC2 | 2.50 | 15 | 35. Use * for everywhere.",
+				"showWhen": {
+					"field": "restaurantMode",
+					"equals": true
+				}
+			},
+			"tipPresets": {
+				"type": "string",
+				"label": "Tip presets (%)",
+				"default": "0, 10, 15, 20",
+				"showWhen": {
+					"field": "restaurantMode",
+					"equals": true
+				}
+			},
+			"serviceChargePct": {
+				"type": "number",
+				"label": "Service charge for dine-in (%)",
+				"default": 0,
+				"showWhen": {
+					"field": "restaurantMode",
+					"equals": true
+				}
+			},
+			"allowPayAtTable": {
+				"type": "boolean",
+				"label": "Dine-in guests may order now and pay at the table / counter",
+				"default": true,
+				"showWhen": {
+					"field": "restaurantMode",
+					"equals": true
+				}
+			},
+			"allowPayOnCollection": {
+				"type": "boolean",
+				"label": "Allow pay on collection / cash on delivery",
+				"default": false,
+				"showWhen": {
+					"field": "restaurantMode",
+					"equals": true
+				}
+			},
+			"qrOrdering": {
+				"type": "boolean",
+				"label": "QR table ordering",
+				"description": "Each table gets a QR code that opens the menu with the table pre-selected.",
+				"default": true,
+				"showWhen": {
+					"field": "restaurantMode",
+					"equals": true
+				}
+			},
+			"kdsStations": {
+				"type": "string",
+				"label": "Kitchen stations",
+				"description": "Comma-separated; dishes route to the station in their `station` field.",
+				"default": "kitchen, bar",
+				"showWhen": {
+					"field": "restaurantMode",
+					"equals": true
+				}
+			},
+			"printnodeApiKey": {
+				"type": "secret",
+				"label": "PrintNode API key",
+				"description": "Optional cloud printing. Without it, the Printer agent in the staff app prints through the browser.",
+				"showWhen": {
+					"field": "restaurantMode",
+					"equals": true
+				}
+			},
+			"receiptHeader": {
+				"type": "string",
+				"label": "Receipt header",
+				"description": "Printed above every receipt (address, VAT number\u2026).",
+				"showWhen": {
+					"field": "restaurantMode",
+					"equals": true
+				}
+			},
+			"receiptFooter": {
+				"type": "string",
+				"label": "Receipt footer",
+				"default": "Thank you \u2014 see you again soon!",
+				"showWhen": {
+					"field": "restaurantMode",
+					"equals": true
+				}
+			},
+			"reservationsEnabled": {
+				"type": "boolean",
+				"label": "Table reservations",
+				"default": false,
+				"showWhen": {
+					"field": "restaurantMode",
+					"equals": true
+				}
+			},
+			"turnTimeMin": {
+				"type": "number",
+				"label": "Table turn time (minutes)",
+				"default": 90,
+				"showWhen": {
+					"field": "restaurantMode",
+					"equals": true
+				}
+			},
+			"maxPartySize": {
+				"type": "number",
+				"label": "Largest party bookable online",
+				"default": 8,
+				"showWhen": {
+					"field": "restaurantMode",
+					"equals": true
+				}
+			},
+			"reservationLeadMin": {
+				"type": "number",
+				"label": "Reservation lead time (minutes)",
+				"default": 60,
+				"showWhen": {
+					"field": "restaurantMode",
+					"equals": true
+				}
+			}
+		}
+	},
+	"grants": [
+		{
+			"key": "orders:read",
+			"label": "Read orders",
+			"description": "View orders, stats and exports"
+		},
+		{
+			"key": "orders:manage",
+			"label": "Manage orders",
+			"description": "Fulfil, cancel, refund, mark paid"
+		},
+		{
+			"key": "inventory:manage",
+			"label": "Manage inventory",
+			"description": "Adjust stock counters"
+		}
+	]
+}

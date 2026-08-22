@@ -1,0 +1,15 @@
+{
+	"name": "premium-cms-plugins",
+	"private": true,
+	"type": "module",
+	"description": "First-party PremiumCMS marketplace plugins (sandboxed EmDash plugins).",
+	"scripts": {
+		"build": "bash bin/build.sh",
+		"check": "bash bin/check.sh",
+		"publish-all": "bash bin/publish.sh --all --prune"
+	},
+	"devDependencies": {
+		"emdash": "^0.33.0",
+		"typescript": "^5.9.2"
+	}
+}

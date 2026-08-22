@@ -1,0 +1,9 @@
+{
+	"slug": "premium-commerce",
+	"name": "Commerce",
+	"description": "Sell products from your CMS: Stripe Checkout (cards, wallets, tax, shipping rates, promo codes), pay-later orders, inventory, order management, emails and CSV export.",
+	"license": "MIT",
+	"author": { "name": "PremiumCMS" },
+	"keywords": ["commerce", "shop", "stripe", "orders", "products"],
+	"homepage": "https://premium-cms.com"
+}

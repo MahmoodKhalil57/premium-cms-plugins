@@ -1,0 +1,9 @@
+{
+	"slug": "premium-platform",
+	"name": "Platform (provider)",
+	"description": "The PremiumCMS control plane: provision fully isolated CMS instances onto your Cloudflare account, manage custom domains, branded email and GitHub-hosted frontends. For provider instances only.",
+	"license": "UNLICENSED",
+	"author": { "name": "PremiumCMS" },
+	"keywords": ["platform", "provider", "provisioning"],
+	"homepage": "https://premium-cms.com"
+}
