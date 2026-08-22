@@ -1,3 +1,4 @@
+import type { FormPage } from "../types.js";
 /**
  * Form CRUD route handlers.
  *
@@ -62,7 +63,7 @@ export async function formsCreateHandler(ctx: RouteContext<FormCreateInput>) {
 	const form: FormDefinition = {
 		name: input.name,
 		slug: input.slug,
-		pages: input.pages,
+		pages: input.pages as FormPage[],
 		settings: {
 			confirmationMessage: input.settings.confirmationMessage ?? "Thank you for your submission.",
 			redirectUrl: input.settings.redirectUrl || undefined,
@@ -125,7 +126,7 @@ export async function formsUpdateHandler(ctx: RouteContext<FormUpdateInput>) {
 		...existing,
 		name: input.name ?? existing.name,
 		slug: input.slug ?? existing.slug,
-		pages: input.pages ?? existing.pages,
+		pages: (input.pages ?? existing.pages) as FormPage[],
 		settings: input.settings ? { ...existing.settings, ...input.settings } : existing.settings,
 		status: input.status ?? existing.status,
 		updatedAt: new Date().toISOString(),

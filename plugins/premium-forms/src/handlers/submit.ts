@@ -104,7 +104,7 @@ export async function submitHandler(ctx: RouteContext<SubmitInput>) {
 	// 4. Upload files
 	const files: SubmissionFile[] = [];
 	if (input.files && ctx.media && "upload" in ctx.media) {
-		const mediaWithWrite = ctx.media as {
+		const mediaWithWrite = ctx.media as unknown as {
 			upload(
 				filename: string,
 				contentType: string,
