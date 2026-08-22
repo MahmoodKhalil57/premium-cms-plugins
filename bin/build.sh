@@ -5,7 +5,7 @@
 #   bin/build.sh premium-commerce      bin/build.sh        (all)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-[ -d "$ROOT/node_modules/emdash" ] || (cd "$ROOT" && bun install --silent)
+[ -d "$ROOT/node_modules/zod" ] || (cd "$ROOT" && bun install --silent)
 build_one() {
 	local id="$1" dir="$ROOT/plugins/$1" out="$ROOT/dist/$1"
 	[ -f "$dir/manifest.json" ] || { echo "skip $id (no manifest.json)"; return 0; }
@@ -15,11 +15,8 @@ build_one() {
 	cp "$dir/manifest.json" "$out/"; [ -f "$dir/README.md" ] && cp "$dir/README.md" "$out/"; [ -f "$dir/emdash-plugin.jsonc" ] && cp "$dir/emdash-plugin.jsonc" "$out/"; [ -f "$dir/icon.png" ] && cp "$dir/icon.png" "$out/"
 	if grep -qE '^import |from ?"[a-z@]' "$out/backend.js"; then echo "$id: backend.js has unbundled imports"; exit 1; fi
 	(cd "$ROOT" && bun -e '
-import { pluginManifestSchema } from "emdash";
+import { pluginManifestSchema } from "./shared/manifest-schema.ts";
 const m = JSON.parse(await Bun.file(process.argv[1]).text());
-// The published schema predates plugin-grant permissions (<pluginId>:<grant>), which the
-// PremiumCMS image accepts; map them to a built-in permission for this structural check only.
-for (const route of m.routes ?? []) if (typeof route.permission === "string" && route.permission.startsWith(`${m.id}:`)) route.permission = "settings:manage";
 const r = pluginManifestSchema.safeParse(m);
 if (!r.success) { console.error("manifest INVALID:", JSON.stringify(r.error.issues, null, 1)); process.exit(1); }
 console.log("built", r.data.id, r.data.version, "| routes:", r.data.routes.length, "| hooks:", r.data.hooks.length, "| backend", (await Bun.file(process.argv[2]).size / 1024).toFixed(0) + " KB");

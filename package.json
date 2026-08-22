@@ -9,7 +9,9 @@
 		"publish-all": "bash bin/publish.sh --all --prune"
 	},
 	"devDependencies": {
-		"emdash": "^0.33.0",
-		"typescript": "^5.9.2"
+		"@emdash-cms/auth": "^0.34.0",
+		"@emdash-cms/plugin-types": "^0.3.0",
+		"typescript": "^5.9.2",
+		"zod": "^4.4.0"
 	}
 }
