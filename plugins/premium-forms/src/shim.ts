@@ -33,7 +33,7 @@ export interface PluginContext {
 	log: { info(msg: string, data?: unknown): void; warn(msg: string, data?: unknown): void; error(msg: string, data?: unknown): void };
 	http?: { fetch(url: string, init?: RequestInit): Promise<Response> };
 	email?: { send(message: { to: string; subject: string; text?: string; html?: string }): Promise<unknown> };
-	media?: unknown;
+	media?: { upload?: (input: Record<string, unknown>) => Promise<{ id: string; url?: string }>; delete?: (id: string) => Promise<unknown>; get?: (id: string) => Promise<unknown> };
 	cron?: { schedule(name: string, opts: { schedule: string }): Promise<void>; cancel(name: string): Promise<void> };
 	site?: { url: string };
 	requestMeta?: { ip: string | null; userAgent: string | null; referer: string | null; geo?: { country?: string | null } | null };

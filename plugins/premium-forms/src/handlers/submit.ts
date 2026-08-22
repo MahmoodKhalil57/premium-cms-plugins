@@ -113,15 +113,16 @@ export async function submitHandler(ctx: RouteContext<SubmitInput>) {
 		};
 
 		for (const field of allFields.filter((f) => f.type === "file")) {
-			const fileData = input.files[field.name];
-			if (!fileData) continue;
+			const raw = input.files[field.name];
+			if (!raw) continue;
+			const fileData = { ...raw, bytes: raw.bytes as ArrayBuffer };
 
 			// Validate file type
 			if (field.validation?.accept) {
-				const allowed = field.validation.accept.split(",").map((s) => s.trim().toLowerCase());
+				const allowed: string[] = String(field.validation.accept).split(",").map((s: string) => s.trim().toLowerCase());
 				const ext = `.${fileData.filename.split(".").pop()?.toLowerCase()}`;
 				const typeMatch = allowed.some(
-					(a) =>
+					(a: string) =>
 						a === ext ||
 						a === fileData.contentType ||
 						fileData.contentType.startsWith(a.replace("/*", "/")),

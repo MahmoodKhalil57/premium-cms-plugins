@@ -1,3 +1,4 @@
+import type { FormField } from "./fields.js";
 /**
  * Core types for the forms plugin.
  *
