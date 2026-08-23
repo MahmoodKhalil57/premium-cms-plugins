@@ -375,6 +375,12 @@ export async function fleetSync(ctx: RouteContext<{ key?: string; op?: string; p
 				if (!res.ok) throw new Error(parsed.error ?? `HTTP ${res.status}`);
 				done.push({ id: p.id, result: parsed });
 			} else if (op === "themes") {
+				// Re-applying a theme means its plugin list first (a theme may start needing a new plugin), then the seed.
+				const theme = p.theme_id ? await marketplaceTheme(ctx, env, p.theme_id).catch(() => null) : null;
+				if (theme?.premiumcms?.plugins?.length) {
+					const res = await http(ctx, `https://${p.hostname}/platform/plugins-sync`, { method: "POST", headers: { "x-provision-secret": p.provision_secret!, "Content-Type": "application/json" }, body: JSON.stringify({ install: theme.premiumcms.plugins }) });
+					if (!res.ok) throw new Error(`plugins-sync: ${(JSON.parse(res.text || "{}") as { error?: string }).error ?? res.status}`);
+				}
 				const r = await deployService<{ applied: boolean; entries: number; status: number; detail?: string }>(ctx, env, "/api/v1/theme-seed", { template: templateRepoFor(env, p), cmsUrl: `https://${p.hostname}`, secret: p.provision_secret });
 				if (!r.applied) throw new Error(r.detail ?? `theme-seed ${r.status}`);
 				done.push({ id: p.id, result: { entries: r.entries } });
