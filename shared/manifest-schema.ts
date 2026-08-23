@@ -314,6 +314,7 @@ const declaredAccessSchema = z.object({
 		.optional(),
 	page: z.object({ fragments: accessConstraints.optional() }).optional(),
 	users: z.object({ read: accessConstraints.optional() }).optional(),
+	plugins: z.object({ call: accessConstraints.optional() }).optional(),
 });
 
 // ── Main schema ─────────────────────────────────────────────────
