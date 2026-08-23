@@ -1,0 +1,21 @@
+---
+import Base from "../layouts/Base.astro";
+import CmsContent from "../components/CmsContent.astro";
+import { getEmDashCollection } from "../lib/emdash";
+
+// Designed in the admin as the page with slug `cart` (markers filled by the theme); code is the fallback.
+const { entries: pages } = await getEmDashCollection("pages", { limit: 50 });
+const page = pages.find((p) => p.id === "cart");
+---
+
+<Base title={page?.data.title ?? "Cart"}>
+	{page ? (
+		<CmsContent value={page.data.content} collection="pages" entryId={page.data.id} slug="cart" />
+	) : (
+		<section class="ec-cart">
+			<h1>Your cart</h1>
+			<div data-cart><p>Loading cart…</p></div>
+			<p><a href="/products">← Continue shopping</a></p>
+		</section>
+	)}
+</Base>

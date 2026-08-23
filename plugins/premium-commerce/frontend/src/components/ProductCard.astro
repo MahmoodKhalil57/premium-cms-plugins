@@ -1,0 +1,12 @@
+---
+/** Product card — markup comes from lib/cards.ts (shared with the page-builder markers). */
+import type { Entry } from "../lib/emdash";
+import { productCardHtml } from "../plugins/premium-commerce/cards";
+
+interface Props {
+	product: Entry;
+}
+const { product } = Astro.props;
+---
+
+<Fragment set:html={productCardHtml(product)} />

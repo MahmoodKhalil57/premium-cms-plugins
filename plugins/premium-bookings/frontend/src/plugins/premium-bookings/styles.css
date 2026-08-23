@@ -1,0 +1,11 @@
+/* Bookings: the booking widget (services → day → slot → details). */
+.bk { display: grid; gap: 1.25rem; }
+.bk__steps { display: flex; gap: 1rem; list-style: none; padding: 0; margin: 0; font-size: 0.85rem; color: var(--color-text-secondary, #666); } .bk__steps li.is-active { color: var(--color-brand, inherit); font-weight: 600; } .bk__steps li.is-done { text-decoration: line-through; opacity: 0.7; }
+.bk__services { display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: 0.75rem; }
+.bk__service { display: grid; grid-template-columns: auto 1fr; gap: 0.75rem; text-align: start; font: inherit; color: inherit; background: var(--color-card, transparent); border: 1px solid var(--color-border, currentColor); border-radius: var(--radius, 8px); padding: 0.85rem; cursor: pointer; } .bk__service:hover { border-color: var(--color-brand, currentColor); }
+.bk__service img { width: 64px; height: 64px; object-fit: cover; border-radius: var(--radius, 6px); } .bk__service-body { display: grid; gap: 0.2rem; } .bk__meta { font-size: 0.85rem; color: var(--color-text-secondary, #666); } .bk__desc { font-size: 0.85rem; opacity: 0.85; }
+.bk__chosen { display: flex; gap: 0.5rem; align-items: baseline; flex-wrap: wrap; margin: 0; }
+.bk__days { display: flex; gap: 0.5rem; overflow-x: auto; padding-bottom: 0.25rem; } .bk__day { font: inherit; white-space: nowrap; padding: 0.5rem 0.75rem; border-radius: 999px; border: 1px solid var(--color-border, currentColor); background: transparent; color: inherit; cursor: pointer; } .bk__day.is-active { background: var(--color-brand, #111); color: var(--color-on-brand, #fff); border-color: var(--color-brand, #111); }
+.bk__slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr)); gap: 0.5rem; } .bk__slot { font: inherit; display: grid; gap: 0.1rem; padding: 0.5rem; border-radius: var(--radius, 6px); border: 1px solid var(--color-border, currentColor); background: transparent; color: inherit; cursor: pointer; } .bk__slot small { font-size: 0.7rem; opacity: 0.7; } .bk__slot:hover { border-color: var(--color-brand, currentColor); }
+.bk__intake-title { margin: 1rem 0 0.5rem; font-size: 1.1rem; }
+.bk--confirm h2 { margin-top: 0; }

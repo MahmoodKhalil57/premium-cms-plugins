@@ -1,0 +1,42 @@
+---
+import Base from "../../layouts/Base.astro";
+import Image from "../../components/Image.astro";
+import AddToCart from "../../components/AddToCart.astro";
+import { renderPortableText } from "../../lib/pt";
+import { getEmDashCollection, type Entry } from "../../lib/emdash";
+import { formatPrice, STORE_CURRENCY } from "../../plugins/premium-commerce/money";
+
+export async function getStaticPaths() {
+	const { entries } = await getEmDashCollection("products");
+	return entries.map((product) => ({ params: { slug: product.id }, props: { product } }));
+}
+
+const product = (Astro.props as { product?: Entry }).product ?? (await getEmDashCollection("products")).entries.find((e) => e.id === Astro.params.slug);
+if (!product) return Astro.redirect("/404");
+const f = product.data.fields;
+const image = (f.image ?? null) as Parameters<typeof Image>[0]["image"] | null;
+const description = Array.isArray(f.description) ? renderPortableText(f.description as Parameters<typeof renderPortableText>[0]) : "";
+---
+
+<Base title={product.data.title ?? product.id} description={(f.summary as string) ?? undefined}>
+	<article class="ec-product">
+		<nav class="ec-breadcrumb"><a href="/products">Shop</a> / <span>{product.data.title}</span></nav>
+		<div class="ec-product__layout">
+			<div class="ec-product__media">
+				{image ? <Image image={image} /> : <div class="ec-product-card__placeholder" aria-hidden="true"></div>}
+			</div>
+			<div class="ec-product__info">
+				<h1>{product.data.title}</h1>
+				<p class="ec-product__price">
+					<span data-product-price={product.id}>{formatPrice(f.price as number, STORE_CURRENCY)}</span>
+					{f.compare_at_price ? <s>{formatPrice(f.compare_at_price as number, STORE_CURRENCY)}</s> : null}
+				</p>
+				{f.summary ? <p class="ec-product__summary">{f.summary}</p> : null}
+				<AddToCart product={product} />
+				<p class="ec-product__links"><a href="/cart">View bag (<span data-cart-count>0</span>)</a></p>
+				{f.sku ? <p class="ec-product__sku">SKU {f.sku}</p> : null}
+			</div>
+		</div>
+		{description ? <div class="ec-product__description" set:html={description} /> : null}
+	</article>
+</Base>

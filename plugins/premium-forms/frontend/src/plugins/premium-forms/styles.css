@@ -1,0 +1,15 @@
+/* Forms: field renderer, signature pads, statuses. Minimal — inherits the site's type and colours. */
+.ec-form { display: grid; gap: 1rem; max-width: 40rem; }
+.ec-form-page { border: 0; padding: 0; margin: 0; display: grid; gap: 1rem; }
+.ec-form-field { display: grid; gap: 0.35rem; }
+.ec-form-label { font-weight: 600; }
+.ec-form-input, .ec-form-page select { font: inherit; padding: 0.6rem 0.75rem; border: 1px solid currentColor; border-radius: 4px; background: transparent; color: inherit; width: 100%; }
+.ec-form-radio-group, .ec-form-checkbox-group { border: 0; padding: 0; margin: 0; display: grid; gap: 0.35rem; }
+.ec-form-help { font-size: 0.875rem; opacity: 0.75; }
+.ec-form-error { color: #b42318; font-size: 0.875rem; min-height: 1em; }
+.ec-form-required { color: #b42318; }
+.ec-form-submit { font: inherit; font-weight: 600; padding: 0.65rem 1.25rem; border-radius: var(--radius, 6px); border: 1px solid var(--color-brand, currentColor); background: var(--color-brand, transparent); color: var(--color-on-brand, inherit); cursor: pointer; }
+.ec-form-submit:hover { background: var(--color-brand-hover, var(--color-brand)); }
+.ec-form-submit[disabled] { opacity: 0.6; cursor: default; }
+.ec-form-status--success { color: #067647; }
+.ec-form-status--error { color: #b42318; }

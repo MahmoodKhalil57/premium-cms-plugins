@@ -25,6 +25,10 @@ When the PR is merged to `main`, CI publishes **every** plugin in the repo to th
 
 Plugins never share storage. They call each other's routes through `ctx.plugins.call(pluginId, route, input)` (capability `plugins:call`; the target route lists the caller in its manifest `callers`, `"*"` = any plugin) and publish events with `ctx.plugins.emit(name, payload)` that others receive through a `plugin:event` hook (manifest `events` filter, `<pluginId>:<event>`). Routes called this way see `ctx.callerPlugin`. The Commerce README documents the three contracts every plugin can build on: provider lines (`commerce/line`), checkout extensions (`commerce/checkout`) and `premium-commerce:order.*` events; Bookings and Restaurant are the first two users.
 
+## Plugin frontends
+
+A plugin that needs code in the visitor's browser (or pages / components / `<head>` tags at build time) ships it in `plugins/<id>/frontend/`: `frontend.json` (`id`, `dependsOn`) and a `src/` overlay for the shared frontend template — `src/plugins/<id>/index.ts` (client entry: imports `styles.css`, boots), optional `src/plugins/<id>/server.ts` (`head(ctx)`, `fillSlots(html)`), plugin pages under `src/pages/`, components under `src/components/`. The themes repo composes the template core with the frontends of the plugins a theme lists (`bin/compose-frontend.sh`); the image composes all of them for the golden bundle. Versions are the plugin's `manifest.json` version — bump it for frontend changes too, it is what `template.json` / "Theme updates" compare.
+
 ## Rules of the sandbox
 
 - Plugins run in a Worker-loader isolate with **50 subrequests** per invocation; every `ctx.kv` / `ctx.storage` / `ctx.content` / `ctx.email` / `ctx.http` call counts. Load settings with one `kv.list("settings:")`.

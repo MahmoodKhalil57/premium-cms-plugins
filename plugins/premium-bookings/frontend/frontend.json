@@ -1,0 +1,8 @@
+{
+	"id": "premium-bookings",
+	"dependsOn": [
+		"premium-commerce",
+		"premium-forms"
+	],
+	"description": "Booking widget ([data-booking]) with intake forms; pays through the Commerce checkout."
+}

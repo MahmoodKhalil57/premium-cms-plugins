@@ -1,6 +1,6 @@
 {
 	"id": "premium-platform",
-	"version": "1.10.2",
+	"version": "1.11.0",
 	"capabilities": [
 		"network:request:unrestricted"
 	],

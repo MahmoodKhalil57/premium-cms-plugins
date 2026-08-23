@@ -1,0 +1,26 @@
+---
+import Base from "../../layouts/Base.astro";
+import CmsContent from "../../components/CmsContent.astro";
+import { getEmDashCollection } from "../../lib/emdash";
+import ProductCard from "../../components/ProductCard.astro";
+// Designed in the admin as the page with slug `products` (markers filled by the theme); code is the fallback.
+const { entries: pages } = await getEmDashCollection("pages", { limit: 50 });
+const page = pages.find((p) => p.id === "products");
+const { entries: products } = await getEmDashCollection("products");
+const featured = products.filter((p) => p.data.fields.featured);
+const rest = products.filter((p) => !p.data.fields.featured);
+---
+
+<Base title={page?.data.title ?? "Shop"}>
+	{page ? (
+		<CmsContent value={page.data.content} collection="pages" entryId={page.data.id} slug="products" />
+	) : (
+		<section class="ec-shop">
+			<header class="ec-shop__header">
+				<h1>Shop</h1>
+				<a class="ec-cart-link" href="/cart">Bag (<span data-cart-count>0</span>)</a>
+			</header>
+			{products.length === 0 ? <p>No products yet.</p> : <div class="ec-product-grid">{[...featured, ...rest].map((product) => <ProductCard product={product} />)}</div>}
+		</section>
+	)}
+</Base>

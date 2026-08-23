@@ -267,8 +267,16 @@ export async function githubCreateRepo(ctx: PluginContext, env: ProviderEnv, pro
  */
 const THEME_PUSH_KEEP = ["src/config.ts", "seed/seed.json", "seed/content/posts/", "seed/content/products/"];
 
+/** What a composed frontend was built from (template.json at the repo root). */
+export interface TemplateVersions {
+	template: string;
+	plugins: Record<string, string>;
+}
+
 export interface ThemeDrift {
 	upstream: string;
+	/** Template + plugin frontend versions of the site's repo and of the official theme (when both publish template.json). */
+	versions?: { site: TemplateVersions | null; latest: TemplateVersions | null };
 	/** Commits the site's repo has that the theme doesn't (customisations). */
 	aheadBy: number;
 	/** Theme commits the site's repo doesn't have yet. */
@@ -277,6 +285,19 @@ export interface ThemeDrift {
 	/** A merge-upstream can bring the theme commits in (only meaningful when behind). */
 	syncable: boolean;
 	checkedAt: string;
+}
+
+async function templateVersionsAt(ctx: PluginContext, token: string, repo: string, ref: string): Promise<TemplateVersions | null> {
+	const res = await http(ctx, `${GH}/repos/${repo}/contents/template.json?ref=${encodeURIComponent(ref)}`, { headers: ghHeaders(token) });
+	if (!res.ok) return null;
+	try {
+		const body = res.json<{ content?: string }>();
+		const text = atob((body.content ?? "").replace(/\n/g, ""));
+		const j = JSON.parse(text) as { template?: string; plugins?: Record<string, string> };
+		return j.template ? { template: j.template, plugins: j.plugins ?? {} } : null;
+	} catch {
+		return null;
+	}
 }
 
 /** How far the site's frontend has drifted from the official theme (forks only). */
@@ -290,7 +311,8 @@ export async function githubThemeDrift(ctx: PluginContext, env: ProviderEnv, pro
 		const res = await http(ctx, `${GH}/repos/${template}/compare/${project.github_theme_sha}...main`, { headers: ghHeaders(token) });
 		if (!res.ok) return null;
 		const behindBy = res.json<{ ahead_by?: number }>().ahead_by ?? 0;
-		return { upstream: template, aheadBy: 0, behindBy, status: behindBy > 0 ? "behind" : "identical", syncable: behindBy > 0, checkedAt: new Date().toISOString() };
+		const versions = behindBy > 0 ? { site: await templateVersionsAt(ctx, token, template, project.github_theme_sha), latest: await templateVersionsAt(ctx, token, template, "main") } : undefined;
+		return { upstream: template, aheadBy: 0, behindBy, status: behindBy > 0 ? "behind" : "identical", syncable: behindBy > 0, checkedAt: new Date().toISOString(), ...(versions ? { versions } : {}) };
 	}
 	const [owner, repo] = project.github_repo.split("/");
 	const res = await http(ctx, `${GH}/repos/${template}/compare/main...${owner}:${repo}:main`, { headers: ghHeaders(token) });
@@ -299,7 +321,8 @@ export async function githubThemeDrift(ctx: PluginContext, env: ProviderEnv, pro
 	const aheadBy = data.ahead_by ?? 0;
 	const behindBy = data.behind_by ?? 0;
 	const status = aheadBy === 0 && behindBy === 0 ? "identical" : aheadBy > 0 && behindBy > 0 ? "diverged" : aheadBy > 0 ? "ahead" : "behind";
-	return { upstream: template, aheadBy, behindBy, status, syncable: behindBy > 0, checkedAt: new Date().toISOString() };
+	const versions = behindBy > 0 ? { site: await templateVersionsAt(ctx, token, project.github_repo, "main"), latest: await templateVersionsAt(ctx, token, template, "main") } : undefined;
+	return { upstream: template, aheadBy, behindBy, status, syncable: behindBy > 0, checkedAt: new Date().toISOString(), ...(versions ? { versions } : {}) };
 }
 
 /** Merge the official theme's new commits into the site's repo; GitHub refuses when there are conflicts. */
