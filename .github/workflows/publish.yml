@@ -50,3 +50,10 @@ jobs:
           DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
           PLATFORM_URL: ${{ vars.PLATFORM_URL || 'https://premium-cms.com' }}
         run: bash bin/fleet-sync.sh plugins
+      - name: Update plugins on the platform instance itself (apex is not a project)
+        env:
+          APEX_PROVISION_SECRET: ${{ secrets.APEX_PROVISION_SECRET }}
+          PLATFORM_URL: ${{ vars.PLATFORM_URL || 'https://premium-cms.com' }}
+        run: |
+          res=$(curl -sS --max-time 300 -X POST "$PLATFORM_URL/platform/plugins-sync" -H "x-provision-secret: $APEX_PROVISION_SECRET" -H "Content-Type: application/json" -d '{}')
+          echo "$res" | python3 -c "import json,sys; d=json.load(sys.stdin); print('apex:', json.dumps(d)[:400]); sys.exit(1 if d.get('error') or d.get('errors') else 0)"

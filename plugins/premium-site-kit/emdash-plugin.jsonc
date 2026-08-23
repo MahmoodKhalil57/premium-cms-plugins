@@ -1,9 +1,9 @@
 {
 	"slug": "premium-site-kit",
-	"name": "Commerce",
-	"description": "Sell products from your CMS: Stripe Checkout (cards, wallets, tax, shipping rates, promo codes), pay-later orders, inventory, order management, emails and CSV export.",
+	"name": "Site Kit",
+	"description": "Business profile → schema.org JSON-LD, analytics (GA4 / GTM / Cloudflare Web Analytics) behind a cookie-consent banner, Search Console verification and a live Google reviews feed.",
 	"license": "MIT",
 	"author": { "name": "PremiumCMS" },
-	"keywords": ["commerce", "shop", "stripe", "orders", "products"],
+	"keywords": ["seo", "schema", "analytics", "consent", "gdpr", "google-reviews"],
 	"homepage": "https://premium-cms.com"
 }
