@@ -192,7 +192,7 @@ export async function childGithub(ctx: RouteContext<{ id?: string; secret?: stri
 }
 
 /** A theme from our marketplace catalogue (deploy service), or null when unknown. */
-async function marketplaceTheme(ctx: PluginContext, env: ProviderEnv, id: string): Promise<{ id: string; premiumcms?: { templateRepo?: string } | null } | null> {
+async function marketplaceTheme(ctx: PluginContext, env: ProviderEnv, id: string): Promise<{ id: string; premiumcms?: { templateRepo?: string; plugins?: string[]; colorScheme?: string } | null } | null> {
 	const res = await http(ctx, `${env.DEPLOY_SERVICE_URL}/api/v1/themes/${encodeURIComponent(id)}`, { method: "GET" });
 	if (!res.ok) return null;
 	return res.json<{ id: string; premiumcms?: { templateRepo?: string } | null }>();
@@ -384,4 +384,84 @@ export async function fleetSync(ctx: RouteContext<{ key?: string; op?: string; p
 	}
 	const last = batch[batch.length - 1]?.id ?? ctx.input.after ?? null;
 	return { op, done, failed, remaining: Math.max(0, pending.length - batch.length), after: last, total: wanted.length };
+}
+
+/* ---- demo projects (themes repo) ------------------------------------------ */
+
+interface DemoSpec { theme: string; project: string; siteTitle?: string; tagline?: string; adminEmail?: string }
+
+/**
+ * Reconcile the platform's demo projects with the themes repo's demos.json:
+ * create missing ones (and walk them to live), bind/refresh their theme,
+ * plugins and colour scheme, and destroy demos that were removed. One step
+ * per project per call; CI loops until `remaining` is 0. Only projects marked
+ * `demo_of` are ever deleted.
+ */
+export async function fleetDemos(ctx: RouteContext<{ key?: string; demos?: DemoSpec[]; limit?: number }>) {
+	const env = await loadEnv(ctx);
+	if (!env.DEPLOY_KEY || ctx.input.key !== env.DEPLOY_KEY) throw PluginRouteError.forbidden("unauthorized");
+	const demos = (ctx.input.demos ?? []).filter((d) => d && /^[a-z0-9][a-z0-9-]{1,40}$/.test(d.project ?? "") && d.theme);
+	const limit = Math.min(3, Math.max(1, ctx.input.limit ?? 1));
+	const all = await listProjects(ctx);
+	const byId = new Map(all.map((p) => [p.id, p]));
+	const desired = new Map(demos.map((d) => [d.project, d]));
+	const actions: Array<{ id: string; step: string }> = [];
+	const done: Array<{ id: string; step: string; result?: unknown }> = [];
+	const failed: Array<{ id: string; step: string; error: string }> = [];
+	// 1. demos that disappeared from the repo
+	for (const p of all) if (p.demo_of && !desired.has(p.id)) actions.push({ id: p.id, step: "destroy" });
+	// 2. desired demos: next step by state
+	for (const d of demos) {
+		const p = byId.get(d.project);
+		if (!p) actions.push({ id: d.project, step: "create" });
+		else if (p.status === "resources") actions.push({ id: p.id, step: "deploy" });
+		else if (p.status === "deployed") actions.push({ id: p.id, step: "domain" });
+		else if (p.status === "domain") actions.push({ id: p.id, step: "setup" });
+		else if (p.status === "live" && (p.demo_of !== d.theme || p.theme_id !== d.theme)) actions.push({ id: p.id, step: "bind-theme" });
+		else if (p.status === "live" && p.demo_of === d.theme && !(p as { demo_synced_at?: string | null }).demo_synced_at) actions.push({ id: p.id, step: "configure" });
+		else if (p.status === "error") failed.push({ id: p.id, step: "state", error: p.error ?? "project is in error" });
+	}
+	for (const a of actions.slice(0, limit)) {
+		const d = desired.get(a.id);
+		try {
+			if (a.step === "destroy") {
+				const r = await destroyProject(ctx, env, a.id);
+				done.push({ id: a.id, step: a.step, result: r });
+			} else if (a.step === "create") {
+				const adminEmail = d!.adminEmail || env.DEMO_ADMIN_EMAIL;
+				if (!adminEmail) throw new Error("no admin email: set DEMO_ADMIN_EMAIL in the platform plugin settings or adminEmail in demos.json");
+				await createProject(ctx, env, { id: a.id, adminEmail, siteTitle: d!.siteTitle || a.id, tagline: d!.tagline });
+				await updateProject(ctx, a.id, { demo_of: d!.theme });
+				done.push({ id: a.id, step: a.step });
+			} else if (a.step === "deploy") {
+				await deployWorker(ctx, env, a.id);
+				done.push({ id: a.id, step: a.step });
+			} else if (a.step === "domain") {
+				await attachDomain(ctx, env, a.id);
+				done.push({ id: a.id, step: a.step });
+			} else if (a.step === "setup") {
+				const r = await setupCms(ctx, a.id);
+				done.push({ id: a.id, step: a.step, result: { status: r.project.status } });
+			} else if (a.step === "bind-theme") {
+				const theme = await marketplaceTheme(ctx, env, d!.theme);
+				const repo = theme?.premiumcms?.templateRepo?.trim();
+				if (!repo) throw new Error(`theme ${d!.theme} is not in the marketplace (or has no templateRepo)`);
+				await updateProject(ctx, a.id, { demo_of: d!.theme, theme_id: d!.theme, theme_repo: repo, github_theme_sha: null, demo_synced_at: null } as Partial<ProjectRow>);
+				done.push({ id: a.id, step: a.step });
+			} else if (a.step === "configure") {
+				const p = byId.get(a.id)!;
+				const theme = await marketplaceTheme(ctx, env, d!.theme);
+				// plugins + colour scheme on the child, then the theme seed (which also carries plugin settings)
+				const res = await http(ctx, `https://${p.hostname}/platform/plugins-sync`, { method: "POST", headers: { "x-provision-secret": p.provision_secret!, "Content-Type": "application/json" }, body: JSON.stringify({ install: theme?.premiumcms?.plugins ?? [], colorScheme: theme?.premiumcms?.colorScheme ?? null }) });
+				if (!res.ok) throw new Error(`plugins-sync: ${(JSON.parse(res.text || "{}") as { error?: string }).error ?? res.status}`);
+				const seed = await deployService<{ applied: boolean; entries: number; status: number; detail?: string }>(ctx, env, "/api/v1/theme-seed", { template: templateRepoFor(env, p), cmsUrl: `https://${p.hostname}`, secret: p.provision_secret });
+				if (!seed.applied) throw new Error(seed.detail ?? `theme-seed ${seed.status}`);
+				await updateProject(ctx, a.id, { demo_synced_at: new Date().toISOString() } as Partial<ProjectRow>);
+				done.push({ id: a.id, step: a.step, result: { entries: seed.entries, plugins: JSON.parse(res.text || "{}") } });
+			}
+		} catch (err) {
+			failed.push({ id: a.id, step: a.step, error: err instanceof Error ? err.message : String(err) });
+		}
+	}
+	return { done, failed, remaining: Math.max(0, actions.length - limit) + (actions.length ? 0 : 0), planned: actions.map((a) => `${a.id}:${a.step}`) };
 }

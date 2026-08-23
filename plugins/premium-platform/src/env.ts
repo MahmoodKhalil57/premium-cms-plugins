@@ -25,6 +25,7 @@ export interface ProviderEnv {
 	DEFAULT_COLOR_SCHEME: string;
 	DEPLOY_KEY: string;
 	STRIPE_SECRET_KEY: string;
+	DEMO_ADMIN_EMAIL: string;
 	BACKUP_STORE_URL: string;
 	BACKUP_STORE_SECRET: string;
 	BACKUPS_ENABLED: string;
@@ -42,6 +43,7 @@ export interface ProviderEnv {
 }
 
 export const SETTING_KEYS = [
+	"DEMO_ADMIN_EMAIL",
 	"BACKUP_STORE_URL",
 	"BACKUP_STORE_SECRET",
 	"BACKUPS_ENABLED",

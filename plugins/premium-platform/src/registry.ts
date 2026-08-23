@@ -35,6 +35,9 @@ export interface ProjectRow {
 	theme_id?: string | null;
 	theme_repo?: string | null;
 	stripe_customer_id?: string | null;
+	/** Theme id when this project is a marketplace demo managed by the themes repo (fleet/demos may delete it). */
+	demo_of?: string | null;
+	demo_synced_at?: string | null;
 	created_at: string;
 	updated_at: string;
 }

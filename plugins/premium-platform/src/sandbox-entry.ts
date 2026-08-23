@@ -48,7 +48,7 @@ function validated<TIn, TOut>(schema: { parse(x: unknown): TIn }, handler: (ctx:
 	});
 }
 
-import { fleetSync } from "./handlers.js";
+import { fleetDemos, fleetSync } from "./handlers.js";
 import { backupsNightly, projectBackup, projectBackupDelete, projectBackups, projectRestore } from "./backups.js";
 
 export default definePlugin({
@@ -84,6 +84,7 @@ export default definePlugin({
 		"child/credits": { public: true, handler: route(childCredits as never) },
 		"billing/event": { public: true, handler: route(billingEvent as never) },
 		"fleet/sync": { public: true, handler: route(fleetSync as never) },
+		"fleet/demos": { public: true, handler: route(fleetDemos as never) },
 		"projects/backup": { handler: validated(backupSchema, projectBackup as never) },
 		"projects/backups": { handler: validated(withId, projectBackups as never) },
 		"projects/backup-delete": { handler: validated(backupKeySchema, projectBackupDelete as never) },
