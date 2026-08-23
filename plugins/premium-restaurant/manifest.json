@@ -1,6 +1,6 @@
 {
 	"id": "premium-restaurant",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"capabilities": [
 		"email:send",
 		"users:read",

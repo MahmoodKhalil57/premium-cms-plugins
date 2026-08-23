@@ -1,6 +1,6 @@
 {
 	"id": "premium-commerce",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"capabilities": [
 		"content:read",
 		"email:send",

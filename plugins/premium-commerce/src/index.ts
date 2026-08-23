@@ -2,7 +2,7 @@
 export function premiumCommerce() {
 	return {
 		id: "premium-commerce",
-		version: "1.0.1",
+		version: "1.0.2",
 		format: "standard" as const,
 		entrypoint: "premium-commerce/sandbox",
 		options: {},

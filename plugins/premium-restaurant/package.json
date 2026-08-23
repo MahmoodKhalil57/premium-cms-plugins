@@ -1,6 +1,6 @@
 {
 	"name": "premium-restaurant",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"private": true,
 	"type": "module",
 	"description": "Restaurant operations for PremiumCMS on top of Commerce and Bookings \u2014 delivery zones, pickup, QR dine-in, POS with staff PINs and cash drawer, kitchen display and printing.",
