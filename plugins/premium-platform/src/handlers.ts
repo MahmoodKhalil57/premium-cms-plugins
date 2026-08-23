@@ -11,7 +11,7 @@ import { deployService, http, loadEnv, type ProviderEnv, siteUrl, randomToken } 
 import { githubAuthorizeUrl, githubCompleteInstall, githubCompleteOAuth, githubConfigured, githubCreateRepo, githubDisconnect, githubPagesOrigin, githubSyncTheme, githubThemeDrift, githubRebuild, frontendTemplateRepo, peekState, templateRepoFor } from "./github.js";
 import { attachDomain, createProject, deployWorker, destroyProject, setupCms } from "./provisioner.js";
 import { type DomainRow, domains, getDomains, getProject, listProjects, type ProjectRow, projects, updateProject } from "./registry.js";
-import { applyBillingEvent, childBalance, confirmCheckout, createCheckout, CREDIT_PACKS_CENTS, grantCredits, paymentProvider, priceBook, pushCreditsSettings, syncExternalUsage } from "./credits.js";
+import { accountBalance, accountEntry, accountLedger, accountPacks, applyAccountBillingEvent, applyBillingEvent, chargeProvisioning, childBalance, confirmAccountCheckout, confirmCheckout, createAccountCheckout, createCheckout, CREDIT_PACKS_CENTS, ensureAccount, fmtCents, grantCredits, listAccounts, paymentProvider, preloadCents, preloadProject, priceBook, provisionFeeCents, pushCreditsSettings, syncExternalUsage } from "./credits.js";
 import type { PluginContext, RouteContext } from "./shim.js";
 import { PluginRouteError } from "./shim.js";
 
@@ -24,6 +24,8 @@ const publicProject = (p: ProjectRow) => ({
 	status: p.status,
 	error: p.error,
 	bundle_version: p.bundle_version,
+	owner_email: p.owner_email ?? null,
+	preloaded_cents: p.preloaded_cents ?? null,
 	github_login: p.github_login,
 	github_repo: p.github_repo,
 	created_at: p.created_at,
@@ -32,8 +34,15 @@ const publicProject = (p: ProjectRow) => ({
 
 /* ---- admin: projects --------------------------------------------------- */
 
+/** A user's own projects (projects without an owner belong to the provider — see projects/list-all). */
 export async function projectsList(ctx: RouteContext) {
-	return { projects: (await listProjects(ctx)).map(publicProject) };
+	const me = ctx.user?.id;
+	return { projects: (await listProjects(ctx)).filter((p) => p.owner_id === me).map(publicProject), scope: "own" };
+}
+
+/** Every project, for the provider (billing:manage). */
+export async function projectsListAll(ctx: RouteContext) {
+	return { projects: (await listProjects(ctx)).map(publicProject), scope: "all" };
 }
 
 async function withError<T>(ctx: RouteContext, id: string | undefined, fn: () => Promise<T>): Promise<T> {
@@ -46,9 +55,34 @@ async function withError<T>(ctx: RouteContext, id: string | undefined, fn: () =>
 	}
 }
 
+/** Create a project for the signed-in user: charges their account credits (fee + starting credits) when the provider configured them. */
 export async function projectCreate(ctx: RouteContext<{ id: string; adminEmail: string; siteTitle: string; tagline?: string }>) {
 	const env = await loadEnv(ctx);
-	return withError(ctx, ctx.input.id, async () => ({ project: publicProject(await createProject(ctx, env, ctx.input)) }));
+	const user = ctx.user;
+	if (!user) throw PluginRouteError.forbidden("Sign in to create a project");
+	const id = ctx.input.id.trim().toLowerCase();
+	const existing = await getProject(ctx, id);
+	if (existing && existing.owner_id && existing.owner_id !== user.id) throw PluginRouteError.conflict(`The name "${id}" is taken`);
+	if (existing && !existing.owner_id) throw PluginRouteError.conflict(`The name "${id}" is taken`);
+	await ensureAccount(ctx, { id: user.id, email: user.email, name: user.name });
+	const charged = await chargeProvisioning(ctx, env, { id: user.id, email: user.email }, id);
+	return withError(ctx, id, async () => {
+		const project = await createProject(ctx, env, ctx.input);
+		const owned = project.owner_id ? project : await updateProject(ctx, project.id, { owner_id: user.id, owner_email: user.email.toLowerCase() });
+		return { project: publicProject(owned), charged };
+	});
+}
+
+/** Create a project without charging anyone (the provider's own projects, demos, migrations). */
+export async function projectCreateFree(ctx: RouteContext<{ id: string; adminEmail: string; siteTitle: string; tagline?: string; ownerEmail?: string }>) {
+	const env = await loadEnv(ctx);
+	return withError(ctx, ctx.input.id, async () => {
+		const project = await createProject(ctx, env, ctx.input);
+		const owner = ctx.input.ownerEmail?.trim().toLowerCase();
+		const ownerUser = owner && ctx.users ? await ctx.users.getByEmail(owner).catch(() => null) : null;
+		const row = ownerUser ? await updateProject(ctx, project.id, { owner_id: ownerUser.id, owner_email: ownerUser.email.toLowerCase() }) : project;
+		return { project: publicProject(row), charged: { feeCents: 0, preloadCents: 0 } };
+	});
 }
 
 export async function projectDeploy(ctx: RouteContext<{ id: string; version?: string }>) {
@@ -64,8 +98,69 @@ export async function projectDomain(ctx: RouteContext<{ id: string }>) {
 export async function projectSetup(ctx: RouteContext<{ id: string }>) {
 	return withError(ctx, ctx.input.id, async () => {
 		const r = await setupCms(ctx, ctx.input.id);
-		return { project: publicProject(r.project), retryable: r.retryable ?? false, detail: r.detail };
+		let preloaded = 0;
+		if (!r.retryable && r.project.status === "live") {
+			const env = await loadEnv(ctx);
+			preloaded = await preloadProject(ctx, env, r.project).catch((err) => {
+				console.warn(`[platform] preload skipped for ${r.project.id}: ${err instanceof Error ? err.message : String(err)}`);
+				return 0;
+			});
+		}
+		const project = preloaded ? await getProject(ctx, ctx.input.id) : r.project;
+		return { project: publicProject(project ?? r.project), retryable: r.retryable ?? false, detail: r.detail, preloadedCents: preloaded };
 	});
+}
+
+/* ---- account credits (apex users) ------------------------------------------ */
+
+/** The signed-in user's credits: balance, what provisioning costs, packs to buy, checkout and confirmation. */
+export async function accountCredits(ctx: RouteContext<{ op?: string; amountCents?: number; sessionId?: string; origin?: string }>) {
+	const env = await loadEnv(ctx);
+	const user = ctx.user;
+	if (!user) throw PluginRouteError.forbidden("Sign in required");
+	const me = { id: user.id, email: user.email, name: user.name };
+	switch (ctx.input.op ?? "status") {
+		case "status": {
+			await ensureAccount(ctx, me);
+			const [balance, ledger] = await Promise.all([accountBalance(ctx, user.id), accountLedger(ctx, user.id, 30)]);
+			const provider = paymentProvider(env);
+			return { provider, canBuy: provider !== "none", packsCents: accountPacks(env), provisionFeeCents: provisionFeeCents(env), preloadCents: preloadCents(env), ...balance, ledger };
+		}
+		case "checkout": {
+			const origin = typeof ctx.input.origin === "string" && /^https:\/\//.test(ctx.input.origin) ? ctx.input.origin : siteUrl(ctx).replace(/\/$/, "");
+			return createAccountCheckout(ctx, env, me, Number(ctx.input.amountCents), origin);
+		}
+		case "confirm":
+			return confirmAccountCheckout(ctx, env, me, String(ctx.input.sessionId ?? ""));
+		default:
+			throw PluginRouteError.badRequest("unknown op");
+	}
+}
+
+/** Provider view of billing: every account with its balance, and manual grants / refunds. */
+export async function billingOverview(ctx: RouteContext<{ op?: string; userId?: string; email?: string; cents?: number; note?: string }>) {
+	const env = await loadEnv(ctx);
+	switch (ctx.input.op ?? "status") {
+		case "status":
+			return { provider: paymentProvider(env), provisionFeeCents: provisionFeeCents(env), preloadCents: preloadCents(env), packsCents: accountPacks(env), accounts: await listAccounts(ctx) };
+		case "grant": {
+			const cents = Math.round(Number(ctx.input.cents));
+			if (!Number.isFinite(cents) || cents === 0) throw PluginRouteError.badRequest("cents required");
+			let target: { id: string; email: string; name?: string | null } | null = null;
+			if (ctx.input.userId && ctx.users) target = await ctx.users.get(ctx.input.userId).catch(() => null);
+			if (!target && ctx.input.email && ctx.users) target = await ctx.users.getByEmail(ctx.input.email.trim().toLowerCase()).catch(() => null);
+			if (!target) throw PluginRouteError.notFound("No such user");
+			await ensureAccount(ctx, target);
+			await accountEntry(ctx, { userId: target.id, email: target.email, kind: cents > 0 ? "grant" : "refund", cents, ref: `manual:${randomToken(8)}`, note: ctx.input.note ?? (cents > 0 ? "Granted by the provider" : "Adjusted by the provider"), meta: { by: ctx.user?.email ?? null } });
+			return { userId: target.id, granted: cents, ...(await accountBalance(ctx, target.id)) };
+		}
+		case "ledger": {
+			if (!ctx.input.userId) throw PluginRouteError.badRequest("userId required");
+			return { userId: ctx.input.userId, ...(await accountBalance(ctx, ctx.input.userId)), ledger: await accountLedger(ctx, ctx.input.userId, 100) };
+		}
+		default:
+			throw PluginRouteError.badRequest("unknown op");
+	}
 }
 
 export async function projectDestroy(ctx: RouteContext<{ id: string }>) {
@@ -253,9 +348,10 @@ export async function projectCredits(ctx: RouteContext<{ id?: string; op?: strin
 }
 
 /** Verified provider webhook events, forwarded by this instance's /billing-webhook/<provider> route with the deploy key. */
-export async function billingEvent(ctx: RouteContext<{ key?: string; provider?: string; sessionId?: string; project?: string; creditsCents?: number; paid?: boolean; eventId?: string }>) {
+export async function billingEvent(ctx: RouteContext<{ key?: string; provider?: string; sessionId?: string; project?: string; account?: string; creditsCents?: number; paid?: boolean; eventId?: string }>) {
 	const env = await loadEnv(ctx);
 	if (!env.DEPLOY_KEY || ctx.input.key !== env.DEPLOY_KEY) throw PluginRouteError.forbidden("unauthorized");
+	if (ctx.input.account) return applyAccountBillingEvent(ctx, { provider: String(ctx.input.provider ?? ""), sessionId: String(ctx.input.sessionId ?? ""), account: String(ctx.input.account), creditsCents: Number(ctx.input.creditsCents ?? 0), paid: ctx.input.paid === true, eventId: ctx.input.eventId });
 	return applyBillingEvent(ctx, env, { provider: String(ctx.input.provider ?? ""), sessionId: String(ctx.input.sessionId ?? ""), project: String(ctx.input.project ?? ""), creditsCents: Number(ctx.input.creditsCents ?? 0), paid: ctx.input.paid === true, eventId: ctx.input.eventId });
 }
 

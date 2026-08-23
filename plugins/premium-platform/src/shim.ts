@@ -33,6 +33,29 @@ export interface ContentItem {
 	publishedAt: string | null;
 }
 
+export interface UserInfo {
+	id: string;
+	email: string;
+	name: string | null;
+	role: number;
+}
+
+/** Plugin-to-plugin interop (`plugins:call` capability). */
+export interface PluginsAccess {
+	/** Invoke a route of another installed plugin that lists us in its `callers`. Throws when refused. */
+	call<T = unknown>(pluginId: string, route: string, input?: unknown): Promise<T>;
+	/** Publish `<ourId>:<name>` to every plugin subscribed through a `plugin:event` hook. */
+	emit(name: string, payload?: unknown): Promise<void>;
+}
+
+/** What a `plugin:event` hook receives. */
+export interface PluginEvent<T = unknown> {
+	name: string;
+	from: string;
+	payload: T;
+	emittedAt: string;
+}
+
 export interface PluginContext {
 	plugin: { id: string; version: string };
 	storage: Record<string, StorageCollection>;
@@ -52,12 +75,22 @@ export interface PluginContext {
 		get(collection: string, id: string): Promise<ContentItem | null>;
 		list(collection: string, options?: { limit?: number; cursor?: string; orderBy?: Record<string, "asc" | "desc">; where?: { status?: string; locale?: string } }): Promise<{ items: ContentItem[]; cursor?: string; hasMore: boolean }>;
 	};
+	users?: {
+		get(id: string): Promise<UserInfo | null>;
+		getByEmail(email: string): Promise<UserInfo | null>;
+		list(opts?: { role?: number; limit?: number; cursor?: string }): Promise<{ items: UserInfo[]; nextCursor?: string }>;
+	};
+	plugins?: PluginsAccess;
 	requestMeta?: { ip: string | null; userAgent: string | null; referer: string | null; geo?: { country?: string | null } | null };
 }
 
 export interface RouteContext<TInput = unknown> extends PluginContext {
 	input: TInput;
 	request: Request;
+	/** Bound on session/permission routes. */
+	user?: UserInfo;
+	/** Set when another plugin invoked this route through `ctx.plugins.call`. */
+	callerPlugin?: string;
 }
 
 /**
@@ -77,9 +110,6 @@ export class PluginRouteError extends Error {
 		// that the bare message; the machine-readable kind lives in `code`.
 		this.name = "";
 	}
-	/** The sandbox host stringifies thrown errors (`${err}`) into the API
-	 *  error message — return the bare message so visitors never see the
-	 *  class name. */
 	override toString(): string {
 		return this.message;
 	}
@@ -102,11 +132,25 @@ export function route<TIn, TOut>(handler: (ctx: RouteContext<TIn>) => Promise<TO
 		// Two-arg (routeCtx, ctx) calling convention: merge so handlers can use
 		// either style; routeCtx carries input/request, ctx carries capabilities.
 		const merged = (ctx ? Object.assign(Object.create(null), ctx, routeCtx) : routeCtx) as RouteContext<TIn>;
-		// The sandbox bridge relays thrown Errors by message (as a 400 with
-		// code ROUTE_ERROR); anything else is stringified. PluginRouteError is an
-		// Error, so it travels as its message.
 		return handler(merged);
 	};
+}
+
+/** The sandbox hands routes a plain request snapshot (headers as an object) or a real Request. */
+export function headerValue(request: unknown, name: string): string {
+	const h = (request as { headers?: unknown } | undefined)?.headers;
+	if (!h) return "";
+	if (typeof (h as Headers).get === "function") return (h as Headers).get(name) ?? "";
+	const o = h as Record<string, string>;
+	return o[name] ?? o[name.toLowerCase()] ?? "";
+}
+
+/** Routes meant for sibling plugins only (manifest `callers`): refuse direct HTTP callers. */
+export function requireCaller(ctx: RouteContext<unknown>, ...allowed: string[]): string {
+	const from = ctx.callerPlugin;
+	if (!from) throw PluginRouteError.forbidden("This route is for other plugins");
+	if (allowed.length && !allowed.includes(from)) throw PluginRouteError.forbidden(`Not callable by ${from}`);
+	return from;
 }
 
 export const definePlugin = <T>(definition: T): T => definition;

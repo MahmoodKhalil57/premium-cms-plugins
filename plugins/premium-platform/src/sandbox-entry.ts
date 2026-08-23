@@ -11,7 +11,11 @@ import {
 	oauthGithubCallback,
 	oauthGithubSetup,
 	oauthGithubStart,
+	accountCredits,
+	billingOverview,
 	projectCreate,
+	projectCreateFree,
+	projectsListAll,
 	projectCredits,
 	projectDeploy,
 	projectDestroy,
@@ -29,7 +33,9 @@ import { v } from "./validate.js";
 
 const id = v.string({ min: 1, max: 64 });
 const withId = v.object({ id });
-const createSchema = v.object({ id, adminEmail: v.string({ min: 3, max: 200 }), siteTitle: v.string({ min: 1, max: 200 }), tagline: v.string({ max: 300 }).optional() });
+const createSchema = v.object({ id, adminEmail: v.string({ min: 3, max: 200 }), siteTitle: v.string({ min: 1, max: 200 }), tagline: v.string({ max: 300 }).optional(), ownerEmail: v.string({ max: 200 }).optional() });
+const accountCreditsSchema = v.object({ op: v.string({ max: 20 }).optional(), amountCents: v.number({ int: true, min: 0 }).optional(), sessionId: v.string({ max: 200 }).optional(), origin: v.string({ max: 200 }).optional() });
+const billingSchema = v.object({ op: v.string({ max: 20 }).optional(), userId: v.string({ max: 64 }).optional(), email: v.string({ max: 200 }).optional(), cents: v.number({ int: true }).optional(), note: v.string({ max: 200 }).optional() });
 const deploySchema = v.object({ id, version: v.string({ max: 40 }).optional() });
 const backupSchema = v.object({ id, note: v.string({ max: 200 }).optional() });
 const backupKeySchema = v.object({ id, key: v.string({ min: 1, max: 300 }), confirm: v.boolean().optional() });
@@ -69,6 +75,10 @@ export default definePlugin({
 		admin: { handler: route(adminHandler as never) },
 		"projects/list": { handler: route(projectsList as never) },
 		"projects/create": { handler: validated(createSchema, projectCreate as never) },
+		"projects/create-free": { handler: validated(createSchema, projectCreateFree as never) },
+		"projects/list-all": { handler: route(projectsListAll as never) },
+		"account/credits": { handler: validated(accountCreditsSchema, accountCredits as never) },
+		"billing/overview": { handler: validated(billingSchema, billingOverview as never) },
 		"projects/deploy": { handler: validated(deploySchema, projectDeploy as never) },
 		"projects/domain": { handler: validated(withId, projectDomain as never) },
 		"projects/setup": { handler: validated(withId, projectSetup as never) },

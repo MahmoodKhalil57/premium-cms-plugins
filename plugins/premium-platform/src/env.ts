@@ -38,6 +38,10 @@ export interface ProviderEnv {
 	POLAR_ACCESS_TOKEN: string;
 	POLAR_PRODUCT_ID: string;
 	POLAR_WEBHOOK_SECRET: string;
+	/** Account credits: one-off provisioning fee, credits every new project starts with (moved from the owner's account), packs offered. */
+	PROVISION_FEE_CENTS: string;
+	PROJECT_PRELOAD_CENTS: string;
+	ACCOUNT_PACKS_CENTS: string;
 	/** This provider's own origin (children call back here). */
 	EMDASH_SITE_URL: string;
 }
@@ -69,6 +73,9 @@ export const SETTING_KEYS = [
 	"STRIPE_WEBHOOK_SECRET",
 	"PAYMENT_PROVIDER",
 	"STRIPE_SECRET_KEY",
+	"PROVISION_FEE_CENTS",
+	"PROJECT_PRELOAD_CENTS",
+	"ACCOUNT_PACKS_CENTS",
 ] as const;
 
 export const CREDENTIALS_HINT = "Provider credentials not configured — open Plugins → Platform → Settings and add them.";

@@ -300,3 +300,194 @@ export async function applyBillingEvent(ctx: PluginContext, env: ProviderEnv, ev
 	const credited = await grantCredits(ctx, env, project, event.creditsCents * 10_000, `${event.provider}:${event.sessionId}`, `Credit purchase (${event.provider}, webhook)`, { eventId: event.eventId ?? null, amountCents: event.creditsCents });
 	return { credited };
 }
+
+/* ---- Account credits (apex users) ------------------------------------- */
+
+/**
+ * Credits a user holds on the platform itself (bought with the configured
+ * payment provider). Spent on provisioning (the fee) and on the credits a new
+ * project starts with (moved into the project's own ledger at setup). Stored
+ * as an append-only ledger in plugin storage; `ref` makes every entry
+ * idempotent (webhook + return-page confirmation may both report a purchase).
+ */
+export interface AccountLedgerRow {
+	userId: string;
+	email: string;
+	kind: "purchase" | "provision" | "preload" | "grant" | "refund";
+	/** Signed cents: purchases/grants/refunds add, provision/preload subtract. */
+	cents: number;
+	ref: string;
+	note: string;
+	projectId?: string | null;
+	meta?: Record<string, unknown>;
+	createdAt: string;
+}
+export interface AccountRow {
+	userId: string;
+	email: string;
+	name?: string | null;
+	stripe_customer_id?: string | null;
+	createdAt: string;
+	updatedAt: string;
+}
+
+const ledger = (ctx: PluginContext) => ctx.storage.credits as import("./shim.js").StorageCollection<AccountLedgerRow>;
+const accounts = (ctx: PluginContext) => ctx.storage.accounts as import("./shim.js").StorageCollection<AccountRow>;
+
+export function accountPacks(env: ProviderEnv): number[] {
+	const list = String(env.ACCOUNT_PACKS_CENTS || "").split(/[,\s]+/).map(Number).filter((n) => Number.isInteger(n) && n >= 100 && n <= 1_000_000);
+	return list.length ? [...new Set(list)].sort((a, b) => a - b) : CREDIT_PACKS_CENTS;
+}
+export const provisionFeeCents = (env: ProviderEnv) => Math.max(0, Math.round(Number(env.PROVISION_FEE_CENTS) || 0));
+export const preloadCents = (env: ProviderEnv) => Math.max(0, Math.round(Number(env.PROJECT_PRELOAD_CENTS) || 0));
+
+export async function accountLedger(ctx: PluginContext, userId: string, limit = 50): Promise<Array<{ id: string } & AccountLedgerRow>> {
+	const res = await ledger(ctx).query({ where: { userId }, orderBy: { createdAt: "desc" }, limit });
+	return res.items.map((i) => ({ id: i.id, ...i.data }));
+}
+
+export async function accountBalance(ctx: PluginContext, userId: string): Promise<{ balanceCents: number; purchasedCents: number; spentCents: number }> {
+	let purchased = 0;
+	let spent = 0;
+	let cursor: string | undefined;
+	for (let page = 0; page < 20; page++) {
+		const res = await ledger(ctx).query({ where: { userId }, limit: 100, cursor });
+		for (const { data } of res.items) {
+			if (data.cents >= 0) purchased += data.cents;
+			else spent += -data.cents;
+		}
+		if (!res.hasMore || !res.cursor) break;
+		cursor = res.cursor;
+	}
+	return { balanceCents: purchased - spent, purchasedCents: purchased, spentCents: spent };
+}
+
+/** Append one ledger entry; returns false when `ref` was already recorded. */
+export async function accountEntry(ctx: PluginContext, row: Omit<AccountLedgerRow, "createdAt">): Promise<boolean> {
+	const dup = await ledger(ctx).query({ where: { ref: row.ref }, limit: 1 });
+	if (dup.items.length) return false;
+	const id = `${Date.now().toString(36)}${randomToken(8)}`.toUpperCase().slice(0, 26);
+	await ledger(ctx).put(id, { ...row, createdAt: new Date().toISOString() });
+	return true;
+}
+
+export async function ensureAccount(ctx: PluginContext, user: { id: string; email: string; name?: string | null }): Promise<AccountRow> {
+	const existing = await accounts(ctx).get(user.id);
+	if (existing) return existing;
+	const now = new Date().toISOString();
+	const row: AccountRow = { userId: user.id, email: user.email.toLowerCase(), name: user.name ?? null, stripe_customer_id: null, createdAt: now, updatedAt: now };
+	await accounts(ctx).put(user.id, row);
+	return row;
+}
+
+export async function listAccounts(ctx: PluginContext): Promise<Array<AccountRow & { balanceCents: number }>> {
+	const res = await accounts(ctx).query({ orderBy: { updatedAt: "desc" }, limit: 100 });
+	const out: Array<AccountRow & { balanceCents: number }> = [];
+	for (const { data } of res.items) out.push({ ...data, balanceCents: (await accountBalance(ctx, data.userId)).balanceCents });
+	return out;
+}
+
+/** Checkout for account credits; the provider's metadata carries `account` so the webhook credits the right user. */
+export async function createAccountCheckout(ctx: PluginContext, env: ProviderEnv, user: { id: string; email: string; name?: string | null }, amountCents: number, returnOrigin: string): Promise<{ url: string; sessionId: string; provider: PaymentProvider }> {
+	if (!accountPacks(env).includes(amountCents)) throw PluginRouteError.badRequest("unsupported amount");
+	const provider = paymentProvider(env);
+	const account = await ensureAccount(ctx, user);
+	const successUrl = `${returnOrigin}/_emdash/admin/plugins/premium-platform?credits=session:`;
+	const cancelUrl = `${returnOrigin}/_emdash/admin/plugins/premium-platform?credits=cancelled`;
+	if (provider === "stripe") {
+		let customer = account.stripe_customer_id ?? null;
+		if (!customer) {
+			const c = await stripe<{ id: string }>(ctx, env, "POST", "/customers", { email: account.email, name: account.name ?? undefined, "metadata[account]": user.id });
+			customer = c.id;
+			await accounts(ctx).put(user.id, { ...account, stripe_customer_id: customer, updatedAt: new Date().toISOString() });
+		}
+		const session = await stripe<{ id: string; url: string }>(ctx, env, "POST", "/checkout/sessions", {
+			mode: "payment",
+			customer,
+			"line_items[0][price_data][currency]": "usd",
+			"line_items[0][price_data][unit_amount]": amountCents,
+			"line_items[0][price_data][product_data][name]": "PremiumCMS account credits",
+			"line_items[0][quantity]": 1,
+			"metadata[account]": user.id,
+			"metadata[credits_cents]": amountCents,
+			success_url: `${successUrl}{CHECKOUT_SESSION_ID}`,
+			cancel_url: cancelUrl,
+		});
+		return { url: session.url, sessionId: session.id, provider };
+	}
+	if (provider === "polar") {
+		const checkout = await polar<{ id: string; url: string }>(ctx, env, "POST", "/checkouts/", {
+			products: [env.POLAR_PRODUCT_ID],
+			amount: amountCents,
+			customer_email: account.email,
+			customer_name: account.name ?? undefined,
+			success_url: `${successUrl}{CHECKOUT_ID}`,
+			metadata: { account: user.id, credits_cents: String(amountCents) },
+		});
+		return { url: checkout.url, sessionId: checkout.id, provider };
+	}
+	throw PluginRouteError.badRequest("Credit purchases are not enabled yet — no payment provider is configured.");
+}
+
+/** Verify a returned account checkout with the provider and credit the account once (the webhook does the same; `ref` dedupes). */
+export async function confirmAccountCheckout(ctx: PluginContext, env: ProviderEnv, user: { id: string; email: string }, sessionId: string): Promise<{ credited: boolean; cents: number }> {
+	const provider = paymentProvider(env);
+	if (provider === "stripe") {
+		const s = await stripe<{ id: string; payment_status: string; amount_total: number; metadata?: Record<string, string>; payment_intent?: string }>(ctx, env, "GET", `/checkout/sessions/${encodeURIComponent(sessionId)}`);
+		if (s.metadata?.account !== user.id) throw PluginRouteError.forbidden("session belongs to another account");
+		if (s.payment_status !== "paid") return { credited: false, cents: 0 };
+		const cents = Number(s.metadata?.credits_cents ?? s.amount_total ?? 0);
+		const credited = await accountEntry(ctx, { userId: user.id, email: user.email, kind: "purchase", cents, ref: `stripe:${s.id}`, note: "Credit purchase (Stripe)", meta: { paymentIntent: s.payment_intent ?? null } });
+		return { credited, cents };
+	}
+	if (provider === "polar") {
+		const c = await polar<{ id: string; status: string; amount?: number; metadata?: Record<string, string> }>(ctx, env, "GET", `/checkouts/${encodeURIComponent(sessionId)}`);
+		if (c.metadata?.account !== user.id) throw PluginRouteError.forbidden("checkout belongs to another account");
+		if (c.status !== "succeeded") return { credited: false, cents: 0 };
+		const cents = Number(c.metadata?.credits_cents ?? c.amount ?? 0);
+		const credited = await accountEntry(ctx, { userId: user.id, email: user.email, kind: "purchase", cents, ref: `polar:${c.id}`, note: "Credit purchase (Polar)" });
+		return { credited, cents };
+	}
+	throw PluginRouteError.badRequest("No payment provider configured.");
+}
+
+/** Webhook for an account purchase (metadata `account`), mirrored from applyBillingEvent. */
+export async function applyAccountBillingEvent(ctx: PluginContext, event: { provider: string; sessionId: string; account: string; creditsCents: number; paid: boolean; eventId?: string }): Promise<{ credited: boolean }> {
+	if (!event.paid || !event.sessionId || !event.account || !(event.creditsCents > 0)) return { credited: false };
+	const account = await accounts(ctx).get(event.account);
+	if (!account) return { credited: false };
+	const credited = await accountEntry(ctx, { userId: account.userId, email: account.email, kind: "purchase", cents: event.creditsCents, ref: `${event.provider}:${event.sessionId}`, note: `Credit purchase (${event.provider}, webhook)`, meta: { eventId: event.eventId ?? null } });
+	return { credited };
+}
+
+/**
+ * Charge a user's account for a new project: the provisioning fee and the
+ * credits the project will start with. Both entries are keyed by project so a
+ * retried create never charges twice. Throws when the balance is short.
+ */
+export async function chargeProvisioning(ctx: PluginContext, env: ProviderEnv, user: { id: string; email: string }, projectId: string): Promise<{ feeCents: number; preloadCents: number }> {
+	const fee = provisionFeeCents(env);
+	const preload = preloadCents(env);
+	if (fee + preload === 0) return { feeCents: 0, preloadCents: 0 };
+	const already = await ledger(ctx).query({ where: { ref: `provision:${projectId}` }, limit: 1 });
+	if (already.items.length) return { feeCents: fee, preloadCents: preload };
+	const { balanceCents } = await accountBalance(ctx, user.id);
+	if (balanceCents < fee + preload) throw PluginRouteError.badRequest(`Creating a project needs ${fmtCents(fee + preload)} of account credits (${fmtCents(fee)} provisioning fee + ${fmtCents(preload)} starting credits); your balance is ${fmtCents(balanceCents)}. Buy credits first.`);
+	if (fee > 0) await accountEntry(ctx, { userId: user.id, email: user.email, kind: "provision", cents: -fee, ref: `provision:${projectId}`, note: `Provisioning fee — ${projectId}`, projectId });
+	else await accountEntry(ctx, { userId: user.id, email: user.email, kind: "provision", cents: 0, ref: `provision:${projectId}`, note: `Provisioned ${projectId}`, projectId });
+	if (preload > 0) await accountEntry(ctx, { userId: user.id, email: user.email, kind: "preload", cents: -preload, ref: `preload:${projectId}`, note: `Starting credits — ${projectId}`, projectId });
+	return { feeCents: fee, preloadCents: preload };
+}
+
+/** Move the reserved starting credits into the project's own ledger (after setup, when its database is live). Idempotent. */
+export async function preloadProject(ctx: PluginContext, env: ProviderEnv, project: ProjectRow): Promise<number> {
+	if (!project.d1_id || project.preloaded_cents) return 0;
+	const reserved = await ledger(ctx).query({ where: { ref: `preload:${project.id}` }, limit: 1 });
+	const cents = reserved.items[0] ? -reserved.items[0].data.cents : 0;
+	if (cents <= 0) return 0;
+	await grantCredits(ctx, env, project, cents * 10_000, `preload:${project.id}`, "Starting credits (from the owner's account)", { amountCents: cents });
+	await updateProject(ctx, project.id, { preloaded_cents: cents });
+	return cents;
+}
+
+export const fmtCents = (cents: number) => `$${(cents / 100).toFixed(2)}`;

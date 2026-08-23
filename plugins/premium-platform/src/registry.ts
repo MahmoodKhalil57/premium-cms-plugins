@@ -38,6 +38,11 @@ export interface ProjectRow {
 	/** Theme id when this project is a marketplace demo managed by the themes repo (fleet/demos may delete it). */
 	demo_of?: string | null;
 	demo_synced_at?: string | null;
+	/** Apex user who created the project (null = provisioned by the provider). */
+	owner_id?: string | null;
+	owner_email?: string | null;
+	/** Credits moved from the owner's account into the project at setup (idempotency marker). */
+	preloaded_cents?: number | null;
 	created_at: string;
 	updated_at: string;
 }

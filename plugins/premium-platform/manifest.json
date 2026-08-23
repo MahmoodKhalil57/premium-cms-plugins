@@ -1,8 +1,9 @@
 {
 	"id": "premium-platform",
-	"version": "1.11.0",
+	"version": "1.12.0",
 	"capabilities": [
-		"network:request:unrestricted"
+		"network:request:unrestricted",
+		"users:read"
 	],
 	"allowedHosts": [],
 	"storage": {
@@ -18,6 +19,26 @@
 				"project_id",
 				"kind",
 				"status"
+			]
+		},
+		"credits": {
+			"indexes": [
+				"userId",
+				"kind",
+				"createdAt",
+				[
+					"userId",
+					"createdAt"
+				]
+			],
+			"uniqueIndexes": [
+				"ref"
+			]
+		},
+		"accounts": {
+			"indexes": [
+				"email",
+				"updatedAt"
 			]
 		}
 	},
@@ -133,6 +154,22 @@
 		{
 			"name": "fleet/demos",
 			"public": true
+		},
+		{
+			"name": "account/credits",
+			"permission": "premium-platform:projects:read"
+		},
+		{
+			"name": "projects/list-all",
+			"permission": "premium-platform:billing:manage"
+		},
+		{
+			"name": "projects/create-free",
+			"permission": "premium-platform:billing:manage"
+		},
+		{
+			"name": "billing/overview",
+			"permission": "premium-platform:billing:manage"
 		}
 	],
 	"admin": {
@@ -340,6 +377,24 @@
 				"type": "string",
 				"label": "Demo projects admin email",
 				"description": "Owner of the demo projects the themes repository creates (fleet/demos)."
+			},
+			"PROVISION_FEE_CENTS": {
+				"type": "string",
+				"label": "Provisioning fee (cents)",
+				"description": "One-off charge to a user's account credits when they create a project (0 = free). Needs a payment provider above.",
+				"default": "0"
+			},
+			"PROJECT_PRELOAD_CENTS": {
+				"type": "string",
+				"label": "Starting credits per project (cents)",
+				"description": "Every new project starts with this many credits, moved from its owner's account at setup (0 = none).",
+				"default": "0"
+			},
+			"ACCOUNT_PACKS_CENTS": {
+				"type": "string",
+				"label": "Credit packs (cents)",
+				"description": "Amounts users can buy into their account, comma-separated.",
+				"default": "1000, 2500, 5000, 10000"
 			}
 		}
 	},
@@ -353,6 +408,11 @@
 			"key": "projects:manage",
 			"label": "Manage projects",
 			"description": "Create, deploy, set up, destroy projects and their domains"
+		},
+		{
+			"key": "billing:manage",
+			"label": "Manage billing",
+			"description": "See every project and account, grant credits, create projects without charge (the provider)"
 		}
 	]
 }
