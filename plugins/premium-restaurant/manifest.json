@@ -1,104 +1,450 @@
 {
 	"id": "premium-restaurant",
-	"version": "1.0.0",
-	"capabilities": ["email:send", "users:read", "network:request", "plugins:call"],
-	"allowedHosts": ["api.printnode.com"],
+	"version": "1.0.1",
+	"capabilities": [
+		"email:send",
+		"users:read",
+		"network:request",
+		"plugins:call"
+	],
+	"allowedHosts": [
+		"api.printnode.com"
+	],
 	"storage": {
-		"fulfilments": { "indexes": ["orderNumber", "mode", "kitchen", "createdAt", "shiftId"] },
-		"tables": { "indexes": ["code", "active"], "uniqueIndexes": ["code"] },
-		"tickets": { "indexes": ["orderId", "status", "station", "createdAt", ["status", "station"]] },
-		"printJobs": { "indexes": ["status", "printerId", "createdAt", ["printerId", "status"]] },
-		"printers": { "indexes": ["active", "target"] },
-		"shifts": { "indexes": ["staffId", "status", "openedAt"] },
-		"staff": { "indexes": ["active", "name", "userId"] }
+		"fulfilments": {
+			"indexes": [
+				"orderNumber",
+				"mode",
+				"kitchen",
+				"createdAt",
+				"shiftId"
+			]
+		},
+		"tables": {
+			"indexes": [
+				"code",
+				"active"
+			],
+			"uniqueIndexes": [
+				"code"
+			]
+		},
+		"tickets": {
+			"indexes": [
+				"orderId",
+				"status",
+				"station",
+				"createdAt",
+				[
+					"status",
+					"station"
+				]
+			]
+		},
+		"printJobs": {
+			"indexes": [
+				"status",
+				"printerId",
+				"createdAt",
+				[
+					"printerId",
+					"status"
+				]
+			]
+		},
+		"printers": {
+			"indexes": [
+				"active",
+				"target"
+			]
+		},
+		"shifts": {
+			"indexes": [
+				"staffId",
+				"status",
+				"openedAt"
+			]
+		},
+		"staff": {
+			"indexes": [
+				"active",
+				"name",
+				"userId"
+			]
+		}
 	},
 	"hooks": [
-		{ "name": "plugin:activate" },
-		{ "name": "plugin:event", "events": ["premium-commerce:order.created", "premium-commerce:order.paid", "premium-commerce:order.cancelled", "premium-commerce:order.refunded", "premium-commerce:order.fulfilled"] }
+		{
+			"name": "plugin:activate"
+		},
+		{
+			"name": "plugin:event",
+			"events": [
+				"premium-commerce:order.created",
+				"premium-commerce:order.paid",
+				"premium-commerce:order.cancelled",
+				"premium-commerce:order.refunded",
+				"premium-commerce:order.fulfilled"
+			]
+		}
 	],
 	"routes": [
-		{ "name": "config", "public": true, "cacheControl": "public, max-age=30" },
-		{ "name": "menu", "public": true, "cacheControl": "public, max-age=30" },
-		{ "name": "slots", "public": true },
-		{ "name": "zone", "public": true },
-		{ "name": "table", "public": true },
-		{ "name": "track", "public": true },
-		{ "name": "staff/login", "public": true },
-		{ "name": "staff/logout", "public": true },
-		{ "name": "staff/me", "public": true },
-		{ "name": "pos/menu", "public": true },
-		{ "name": "pos/orders", "public": true },
-		{ "name": "pos/order", "public": true },
-		{ "name": "pos/pay", "public": true },
-		{ "name": "pos/void", "public": true },
-		{ "name": "pos/dispatch", "public": true },
-		{ "name": "pos/reprint", "public": true },
-		{ "name": "pos/shift", "public": true },
-		{ "name": "pos/shift/open", "public": true },
-		{ "name": "pos/shift/close", "public": true },
-		{ "name": "pos/shift/movement", "public": true },
-		{ "name": "kds/tickets", "public": true },
-		{ "name": "kds/bump", "public": true },
-		{ "name": "print/jobs", "public": true },
-		{ "name": "print/ack", "public": true },
-		{ "name": "admin", "permission": "premium-restaurant:floor:read" },
-		{ "name": "board", "permission": "premium-restaurant:floor:read" },
-		{ "name": "order-status", "permission": "premium-restaurant:floor:manage" },
-		{ "name": "tables/list", "permission": "premium-restaurant:floor:read" },
-		{ "name": "tables/save", "permission": "premium-restaurant:setup:manage" },
-		{ "name": "tables/delete", "permission": "premium-restaurant:setup:manage" },
-		{ "name": "staff/list", "permission": "premium-restaurant:setup:manage" },
-		{ "name": "staff/save", "permission": "premium-restaurant:setup:manage" },
-		{ "name": "staff/delete", "permission": "premium-restaurant:setup:manage" },
-		{ "name": "printers/list", "permission": "premium-restaurant:setup:manage" },
-		{ "name": "printers/save", "permission": "premium-restaurant:setup:manage" },
-		{ "name": "printers/delete", "permission": "premium-restaurant:setup:manage" },
-		{ "name": "print/test", "permission": "premium-restaurant:setup:manage" },
-		{ "name": "shifts/list", "permission": "premium-restaurant:floor:read" },
-		{ "name": "reservations/sync", "permission": "premium-restaurant:setup:manage" },
-		{ "name": "reservations/list", "permission": "premium-restaurant:floor:read" },
-		{ "name": "commerce/checkout", "permission": "premium-restaurant:floor:manage", "callers": ["premium-commerce"] },
-		{ "name": "internal/fulfilment", "permission": "premium-restaurant:floor:read", "callers": ["*"] }
+		{
+			"name": "config",
+			"public": true,
+			"cacheControl": "public, max-age=30"
+		},
+		{
+			"name": "menu",
+			"public": true,
+			"cacheControl": "public, max-age=30"
+		},
+		{
+			"name": "slots",
+			"public": true
+		},
+		{
+			"name": "zone",
+			"public": true
+		},
+		{
+			"name": "table",
+			"public": true
+		},
+		{
+			"name": "track",
+			"public": true
+		},
+		{
+			"name": "staff/login",
+			"public": true
+		},
+		{
+			"name": "staff/logout",
+			"public": true
+		},
+		{
+			"name": "staff/me",
+			"public": true
+		},
+		{
+			"name": "pos/menu",
+			"public": true
+		},
+		{
+			"name": "pos/orders",
+			"public": true
+		},
+		{
+			"name": "pos/order",
+			"public": true
+		},
+		{
+			"name": "pos/pay",
+			"public": true
+		},
+		{
+			"name": "pos/void",
+			"public": true
+		},
+		{
+			"name": "pos/dispatch",
+			"public": true
+		},
+		{
+			"name": "pos/reprint",
+			"public": true
+		},
+		{
+			"name": "pos/shift",
+			"public": true
+		},
+		{
+			"name": "pos/shift/open",
+			"public": true
+		},
+		{
+			"name": "pos/shift/close",
+			"public": true
+		},
+		{
+			"name": "pos/shift/movement",
+			"public": true
+		},
+		{
+			"name": "kds/tickets",
+			"public": true
+		},
+		{
+			"name": "kds/bump",
+			"public": true
+		},
+		{
+			"name": "print/jobs",
+			"public": true
+		},
+		{
+			"name": "print/ack",
+			"public": true
+		},
+		{
+			"name": "admin",
+			"permission": "premium-restaurant:floor:read"
+		},
+		{
+			"name": "board",
+			"permission": "premium-restaurant:floor:read"
+		},
+		{
+			"name": "order-status",
+			"permission": "premium-restaurant:floor:manage"
+		},
+		{
+			"name": "tables/list",
+			"permission": "premium-restaurant:floor:read"
+		},
+		{
+			"name": "tables/save",
+			"permission": "premium-restaurant:setup:manage"
+		},
+		{
+			"name": "tables/delete",
+			"permission": "premium-restaurant:setup:manage"
+		},
+		{
+			"name": "staff/list",
+			"permission": "premium-restaurant:setup:manage"
+		},
+		{
+			"name": "staff/save",
+			"permission": "premium-restaurant:setup:manage"
+		},
+		{
+			"name": "staff/delete",
+			"permission": "premium-restaurant:setup:manage"
+		},
+		{
+			"name": "printers/list",
+			"permission": "premium-restaurant:setup:manage"
+		},
+		{
+			"name": "printers/save",
+			"permission": "premium-restaurant:setup:manage"
+		},
+		{
+			"name": "printers/delete",
+			"permission": "premium-restaurant:setup:manage"
+		},
+		{
+			"name": "print/test",
+			"permission": "premium-restaurant:setup:manage"
+		},
+		{
+			"name": "shifts/list",
+			"permission": "premium-restaurant:floor:read"
+		},
+		{
+			"name": "reservations/sync",
+			"permission": "premium-restaurant:setup:manage"
+		},
+		{
+			"name": "reservations/list",
+			"permission": "premium-restaurant:floor:read"
+		},
+		{
+			"name": "commerce/checkout",
+			"permission": "premium-restaurant:floor:manage",
+			"callers": [
+				"premium-commerce"
+			]
+		},
+		{
+			"name": "internal/fulfilment",
+			"permission": "premium-restaurant:floor:read",
+			"callers": [
+				"*"
+			]
+		},
+		{
+			"name": "migrate/commerce",
+			"permission": "premium-restaurant:setup:manage"
+		}
 	],
 	"admin": {
 		"pages": [
-			{ "path": "/", "label": "Live board", "icon": "grid" },
-			{ "path": "/tables", "label": "Tables & QR", "icon": "table" },
-			{ "path": "/staff", "label": "Staff PINs", "icon": "users" },
-			{ "path": "/printers", "label": "Printers", "icon": "printer" },
-			{ "path": "/shifts", "label": "Cash drawer", "icon": "wallet" }
+			{
+				"path": "/",
+				"label": "Live board",
+				"icon": "grid"
+			},
+			{
+				"path": "/tables",
+				"label": "Tables & QR",
+				"icon": "table"
+			},
+			{
+				"path": "/staff",
+				"label": "Staff PINs",
+				"icon": "users"
+			},
+			{
+				"path": "/printers",
+				"label": "Printers",
+				"icon": "printer"
+			},
+			{
+				"path": "/shifts",
+				"label": "Cash drawer",
+				"icon": "wallet"
+			}
 		],
-		"widgets": [{ "id": "floor", "title": "Restaurant floor", "size": "half" }],
+		"widgets": [
+			{
+				"id": "floor",
+				"title": "Restaurant floor",
+				"size": "half"
+			}
+		],
 		"settingsSchema": {
-			"storeName": { "type": "string", "label": "Restaurant name", "description": "On receipts and the staff app." },
-			"timezone": { "type": "string", "label": "Time zone", "default": "UTC", "description": "IANA zone for opening hours and order times, e.g. Europe/London." },
-			"fulfilmentModes": { "type": "string", "label": "Ways to order", "default": "delivery, pickup, dine_in", "description": "Comma-separated: delivery, pickup, dine_in." },
-			"openingHours": { "type": "string", "label": "Opening hours", "description": "e.g. mon-thu 11:30-22:00; fri-sat 11:30-23:30; sun 12:00-21:00" },
-			"prepTimeMin": { "type": "number", "label": "Kitchen prep time (minutes)", "default": 25 },
-			"pickupLeadMin": { "type": "number", "label": "Pickup lead time (minutes)", "default": 20 },
-			"orderSlotIntervalMin": { "type": "number", "label": "Order slot interval (minutes)", "default": 15 },
-			"maxOrdersPerSlot": { "type": "number", "label": "Max orders per slot (0 = unlimited)", "default": 0 },
-			"deliveryZones": { "type": "string", "label": "Delivery zones", "description": "One per line: Name | postcode prefixes | fee | minimum order | minutes. Use * for anywhere." },
-			"tipPresets": { "type": "string", "label": "Tip presets (%)", "default": "0, 10, 12.5, 15" },
-			"serviceChargePct": { "type": "number", "label": "Dine-in service charge (%)", "default": 0 },
-			"allowPayAtTable": { "type": "boolean", "label": "Allow pay at the table", "default": true },
-			"allowPayOnCollection": { "type": "boolean", "label": "Allow pay on collection / delivery", "default": false },
-			"qrOrdering": { "type": "boolean", "label": "QR table ordering", "default": true },
-			"kdsStations": { "type": "string", "label": "Kitchen stations", "default": "kitchen", "description": "Comma-separated; products carry a station field to route tickets." },
-			"printnodeApiKey": { "type": "secret", "label": "PrintNode API key", "description": "For cloud printers; browser printers need no key." },
-			"receiptHeader": { "type": "string", "label": "Receipt header", "description": "Address, VAT number …" },
-			"receiptFooter": { "type": "string", "label": "Receipt footer" },
-			"reservationsEnabled": { "type": "boolean", "label": "Online table reservations", "default": false, "description": "Needs the Bookings plugin; tables are mirrored there automatically." },
-			"turnTimeMin": { "type": "number", "label": "Table turn time (minutes)", "default": 90 },
-			"maxPartySize": { "type": "number", "label": "Largest party bookable online", "default": 8 },
-			"reservationLeadMin": { "type": "number", "label": "Reservation notice (minutes)", "default": 60 },
-			"notifyEmail": { "type": "string", "label": "Notify email" },
-			"trackPath": { "type": "string", "label": "Order tracking page", "default": "/track" }
+			"storeName": {
+				"type": "string",
+				"label": "Restaurant name",
+				"description": "On receipts and the staff app."
+			},
+			"timezone": {
+				"type": "string",
+				"label": "Time zone",
+				"default": "UTC",
+				"description": "IANA zone for opening hours and order times, e.g. Europe/London."
+			},
+			"fulfilmentModes": {
+				"type": "string",
+				"label": "Ways to order",
+				"default": "delivery, pickup, dine_in",
+				"description": "Comma-separated: delivery, pickup, dine_in."
+			},
+			"openingHours": {
+				"type": "string",
+				"label": "Opening hours",
+				"description": "e.g. mon-thu 11:30-22:00; fri-sat 11:30-23:30; sun 12:00-21:00"
+			},
+			"prepTimeMin": {
+				"type": "number",
+				"label": "Kitchen prep time (minutes)",
+				"default": 25
+			},
+			"pickupLeadMin": {
+				"type": "number",
+				"label": "Pickup lead time (minutes)",
+				"default": 20
+			},
+			"orderSlotIntervalMin": {
+				"type": "number",
+				"label": "Order slot interval (minutes)",
+				"default": 15
+			},
+			"maxOrdersPerSlot": {
+				"type": "number",
+				"label": "Max orders per slot (0 = unlimited)",
+				"default": 0
+			},
+			"deliveryZones": {
+				"type": "string",
+				"label": "Delivery zones",
+				"description": "One per line: Name | postcode prefixes | fee | minimum order | minutes. Use * for anywhere."
+			},
+			"tipPresets": {
+				"type": "string",
+				"label": "Tip presets (%)",
+				"default": "0, 10, 12.5, 15"
+			},
+			"serviceChargePct": {
+				"type": "number",
+				"label": "Dine-in service charge (%)",
+				"default": 0
+			},
+			"allowPayAtTable": {
+				"type": "boolean",
+				"label": "Allow pay at the table",
+				"default": true
+			},
+			"allowPayOnCollection": {
+				"type": "boolean",
+				"label": "Allow pay on collection / delivery",
+				"default": false
+			},
+			"qrOrdering": {
+				"type": "boolean",
+				"label": "QR table ordering",
+				"default": true
+			},
+			"kdsStations": {
+				"type": "string",
+				"label": "Kitchen stations",
+				"default": "kitchen",
+				"description": "Comma-separated; products carry a station field to route tickets."
+			},
+			"printnodeApiKey": {
+				"type": "secret",
+				"label": "PrintNode API key",
+				"description": "For cloud printers; browser printers need no key."
+			},
+			"receiptHeader": {
+				"type": "string",
+				"label": "Receipt header",
+				"description": "Address, VAT number \u2026"
+			},
+			"receiptFooter": {
+				"type": "string",
+				"label": "Receipt footer"
+			},
+			"reservationsEnabled": {
+				"type": "boolean",
+				"label": "Online table reservations",
+				"default": false,
+				"description": "Needs the Bookings plugin; tables are mirrored there automatically."
+			},
+			"turnTimeMin": {
+				"type": "number",
+				"label": "Table turn time (minutes)",
+				"default": 90
+			},
+			"maxPartySize": {
+				"type": "number",
+				"label": "Largest party bookable online",
+				"default": 8
+			},
+			"reservationLeadMin": {
+				"type": "number",
+				"label": "Reservation notice (minutes)",
+				"default": 60
+			},
+			"notifyEmail": {
+				"type": "string",
+				"label": "Notify email"
+			},
+			"trackPath": {
+				"type": "string",
+				"label": "Order tracking page",
+				"default": "/track"
+			}
 		}
 	},
 	"grants": [
-		{ "key": "floor:read", "label": "See the floor", "description": "Live board, tables, shifts and reservations" },
-		{ "key": "floor:manage", "label": "Run the floor", "description": "Override kitchen states from the admin" },
-		{ "key": "setup:manage", "label": "Set up the restaurant", "description": "Tables, staff PINs, printers, reservation sync" }
+		{
+			"key": "floor:read",
+			"label": "See the floor",
+			"description": "Live board, tables, shifts and reservations"
+		},
+		{
+			"key": "floor:manage",
+			"label": "Run the floor",
+			"description": "Override kitchen states from the admin"
+		},
+		{
+			"key": "setup:manage",
+			"label": "Set up the restaurant",
+			"description": "Tables, staff PINs, printers, reservation sync"
+		}
 	]
 }

@@ -8,6 +8,7 @@ import { configHandler, menuHandler, slotsHandler, tableHandler, trackHandler, z
 import { kdsBumpHandler, kdsTicketsHandler, posDispatchHandler, posMenuHandler, posOrderHandler, posOrdersHandler, posPayHandler, posVoidHandler, printAckHandler, printJobsHandler, reprintHandler, shiftCloseHandler, shiftHandler, shiftMovementHandler, shiftOpenHandler, staffLoginHandler, staffLogoutHandler, staffMeHandler } from "./handlers/staff.js";
 import { syncReservations } from "./reservations.js";
 import { loadSettings } from "./settings.js";
+import { migrateFromCommerceHandler } from "./handlers/migrate.js";
 import { definePlugin, route, type PluginContext, type PluginEvent, type RouteContext } from "./shim.js";
 import { v } from "./validate.js";
 
@@ -98,6 +99,7 @@ export default definePlugin({
 		"shifts/list": { handler: validated(v.object({ limit: v.number({ int: true, min: 1, max: 100 }).optional() }), shiftsListHandler as never) },
 		"reservations/sync": { handler: route(reservationsSyncHandler as never) },
 		"reservations/list": { handler: validated(v.object({ from: v.string({ max: 40 }).optional(), to: v.string({ max: 40 }).optional() }), reservationsListHandler as never) },
+		"migrate/commerce": { handler: route(migrateFromCommerceHandler as never) },
 		// Sibling plugins
 		"commerce/checkout": { handler: route(commerceCheckoutHandler as never) },
 		"internal/fulfilment": { handler: validated(recordDelete, internalFulfilmentHandler as never) },

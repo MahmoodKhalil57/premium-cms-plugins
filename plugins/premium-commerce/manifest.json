@@ -1,6 +1,6 @@
 {
 	"id": "premium-commerce",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"capabilities": [
 		"content:read",
 		"email:send",
@@ -70,6 +70,91 @@
 				"active",
 				"updatedAt",
 				"endsAt"
+			]
+		},
+		"services": {
+			"indexes": [
+				"slug",
+				"active",
+				"sortOrder"
+			]
+		},
+		"staff": {
+			"indexes": [
+				"active",
+				"name"
+			]
+		},
+		"bookings": {
+			"indexes": [
+				"status",
+				"startsAt",
+				"serviceId",
+				"staffId",
+				"orderId",
+				[
+					"status",
+					"startsAt"
+				]
+			]
+		},
+		"automations": {
+			"indexes": [
+				"active",
+				"trigger"
+			]
+		},
+		"tables": {
+			"indexes": [
+				"code",
+				"active"
+			],
+			"uniqueIndexes": [
+				"code"
+			]
+		},
+		"tickets": {
+			"indexes": [
+				"orderId",
+				"status",
+				"station",
+				"createdAt",
+				[
+					"status",
+					"station"
+				]
+			]
+		},
+		"printJobs": {
+			"indexes": [
+				"status",
+				"printerId",
+				"createdAt",
+				[
+					"printerId",
+					"status"
+				]
+			]
+		},
+		"printers": {
+			"indexes": [
+				"active",
+				"target"
+			]
+		},
+		"shifts": {
+			"indexes": [
+				"staffId",
+				"status",
+				"openedAt"
+			]
+		},
+		"reservations": {
+			"indexes": [
+				"status",
+				"at",
+				"tableId",
+				"email"
 			]
 		}
 	},
@@ -284,6 +369,14 @@
 			"permission": "premium-commerce:orders:manage",
 			"callers": [
 				"*"
+			]
+		},
+		{
+			"name": "internal/legacy-export",
+			"permission": "premium-commerce:orders:manage",
+			"callers": [
+				"premium-bookings",
+				"premium-restaurant"
 			]
 		}
 	],

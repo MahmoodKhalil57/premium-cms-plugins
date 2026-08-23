@@ -1,9 +1,9 @@
 {
 	"name": "premium-bookings",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"private": true,
 	"type": "module",
-	"description": "Bookings for PremiumCMS sites — services, staff (CMS users) and resources, availability, holds, deposits through Commerce, intake forms, reminders and recalls.",
+	"description": "Bookings for PremiumCMS sites \u2014 services, staff (CMS users) and resources, availability, holds, deposits through Commerce, intake forms, reminders and recalls.",
 	"exports": {
 		".": "./src/index.ts",
 		"./sandbox": "./src/sandbox-entry.ts"

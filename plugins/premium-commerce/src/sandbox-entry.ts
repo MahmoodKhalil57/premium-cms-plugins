@@ -7,9 +7,9 @@ import { adminHandler } from "./admin.js";
 import { accountAddressDeleteHandler, accountAddressSaveHandler, accountGetHandler, accountOrdersHandler, accountPaymentMethodDeleteHandler, accountPortalHandler, cartGetHandler, cartGuestHandler, cartSaveHandler } from "./handlers/account.js";
 import { collectBalanceHandler, cartsListHandler, customersListHandler, discountDeleteHandler, discountSaveHandler, discountsListHandler, inventoryAdjustHandler, inventoryListHandler, orderGetHandler, orderRefundHandler, ordersExportHandler, ordersListHandler, orderUpdateHandler, statsHandler, transactionsListHandler } from "./handlers/admin-api.js";
 import { expirePendingOrders } from "./handlers/cron.js";
-import { internalCancelHandler, internalCatalogHandler, internalConfigHandler, internalCreateOrderHandler, internalExtensionHandler, internalFulfilHandler, internalOrderHandler, internalOrdersHandler, internalSettleHandler } from "./handlers/internal.js";
+import { internalCancelHandler, internalCatalogHandler, internalConfigHandler, internalCreateOrderHandler, internalExtensionHandler, internalFulfilHandler, internalLegacyExportHandler, internalOrderHandler, internalOrdersHandler, internalSettleHandler } from "./handlers/internal.js";
 import { accountCheckoutHandler, availabilityHandler, catalogHandler, checkoutHandler, confirmHandler, discountPreviewHandler, orderDesignHandler, orderLookupHandler, uploadHandler, webhookHandler } from "./handlers/public.js";
-import { accountAddressDeleteSchema, accountAddressSaveSchema, accountPaymentMethodDeleteSchema, accountPortalSchema, availabilitySchema, cartGetSchema, cartGuestSchema, cartSaveSchema, checkoutSchema, collectBalanceSchema, confirmSchema, discountDeleteSchema, discountPreviewSchema, discountSaveSchema, exportSchema, internalCancelSchema, internalCreateOrderSchema, internalExtensionSchema, internalFulfilSchema, internalOrderSchema, internalOrdersSchema, internalSettleSchema, inventoryAdjustSchema, listSchema, orderDesignSchema, orderGetSchema, orderLookupSchema, orderRefundSchema, ordersListSchema, orderUpdateSchema, uploadSchema, webhookSchema } from "./schemas.js";
+import { accountAddressDeleteSchema, accountAddressSaveSchema, accountPaymentMethodDeleteSchema, accountPortalSchema, availabilitySchema, cartGetSchema, cartGuestSchema, cartSaveSchema, checkoutSchema, collectBalanceSchema, confirmSchema, discountDeleteSchema, discountPreviewSchema, discountSaveSchema, exportSchema, internalCancelSchema, internalCreateOrderSchema, internalExtensionSchema, internalFulfilSchema, internalLegacyExportSchema, internalOrderSchema, internalOrdersSchema, internalSettleSchema, inventoryAdjustSchema, listSchema, orderDesignSchema, orderGetSchema, orderLookupSchema, orderRefundSchema, ordersListSchema, orderUpdateSchema, uploadSchema, webhookSchema } from "./schemas.js";
 import { definePlugin, route, type PluginContext, type RouteContext } from "./shim.js";
 
 function validated<TIn, TOut>(schema: { parse(v: unknown): TIn }, handler: (ctx: RouteContext<TIn>) => Promise<TOut>) {
@@ -83,5 +83,6 @@ export default definePlugin({
 		"internal/cancel": { handler: validated(internalCancelSchema, internalCancelHandler as never) },
 		"internal/fulfil": { handler: validated(internalFulfilSchema, internalFulfilHandler as never) },
 		"internal/extension": { handler: validated(internalExtensionSchema, internalExtensionHandler as never) },
+		"internal/legacy-export": { handler: validated(internalLegacyExportSchema, internalLegacyExportHandler as never) },
 	},
 });

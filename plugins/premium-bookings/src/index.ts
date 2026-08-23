@@ -2,7 +2,7 @@
 export function premiumBookings() {
 	return {
 		id: "premium-bookings",
-		version: "1.0.0",
+		version: "1.0.1",
 		format: "standard" as const,
 		entrypoint: "premium-bookings/sandbox",
 		options: {},

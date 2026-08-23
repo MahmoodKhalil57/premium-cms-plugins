@@ -2,7 +2,7 @@
 export function premiumRestaurant() {
 	return {
 		id: "premium-restaurant",
-		version: "1.0.0",
+		version: "1.0.1",
 		format: "standard" as const,
 		entrypoint: "premium-restaurant/sandbox",
 		options: {},

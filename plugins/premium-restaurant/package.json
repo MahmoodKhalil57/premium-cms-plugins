@@ -1,9 +1,9 @@
 {
 	"name": "premium-restaurant",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"private": true,
 	"type": "module",
-	"description": "Restaurant operations for PremiumCMS on top of Commerce and Bookings — delivery zones, pickup, QR dine-in, POS with staff PINs and cash drawer, kitchen display and printing.",
+	"description": "Restaurant operations for PremiumCMS on top of Commerce and Bookings \u2014 delivery zones, pickup, QR dine-in, POS with staff PINs and cash drawer, kitchen display and printing.",
 	"exports": {
 		".": "./src/index.ts",
 		"./sandbox": "./src/sandbox-entry.ts"

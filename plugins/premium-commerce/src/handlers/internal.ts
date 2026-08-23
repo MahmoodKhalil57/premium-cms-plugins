@@ -188,3 +188,17 @@ export async function internalExtensionHandler(ctx: RouteContext<{ id: string; m
 	await saveOrder(ctx, ctx.input.id, o);
 	return { id: ctx.input.id };
 }
+
+/**
+ * Records left behind by Commerce 0.9.x, which bundled bookings and the
+ * restaurant: Bookings and Restaurant import them once (`migrate/commerce`).
+ * The staff PIN salt travels along so existing PINs keep working.
+ */
+export async function internalLegacyExportHandler(ctx: RouteContext<{ collection: string; cursor?: string }>) {
+	requireCaller(ctx, "premium-bookings", "premium-restaurant");
+	const col = ctx.storage[ctx.input.collection];
+	if (!col) return { items: [], cursor: undefined, hasMore: false, salt: null };
+	const res = await col.query({ limit: 100, cursor: ctx.input.cursor });
+	const salt = ctx.input.collection === "staff" ? await ctx.kv.get<string>("staff:salt") : null;
+	return { items: res.items, cursor: res.cursor, hasMore: res.hasMore, salt };
+}

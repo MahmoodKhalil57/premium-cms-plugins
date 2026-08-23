@@ -130,3 +130,4 @@ export const internalSettleSchema = v.object({ id, offline: v.object({ method: v
 export const internalCancelSchema = v.object({ id, note: v.string({ max: 300 }).optional() });
 export const internalFulfilSchema = v.object({ id, note: v.string({ max: 300 }).optional() });
 export const internalExtensionSchema = v.object({ id, meta: v.unknown() });
+export const internalLegacyExportSchema = v.object({ collection: v.enumOf(["services", "staff", "bookings", "automations", "tables", "tickets", "printJobs", "printers", "shifts", "reservations"] as const), cursor: v.string().optional() });
