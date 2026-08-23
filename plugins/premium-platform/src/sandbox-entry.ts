@@ -32,6 +32,7 @@ import {
 	projectsList,
 	registryImport,
 	fleetExport,
+	fleetSeed,
 } from "./handlers.js";
 import { definePlugin, route, type PluginContext, type RouteContext } from "./shim.js";
 import { v } from "./validate.js";
@@ -106,6 +107,7 @@ export default definePlugin({
 		"fleet/sync": { public: true, handler: route(fleetSync as never) },
 		"fleet/demos": { public: true, handler: route(fleetDemos as never) },
 		"fleet/export": { public: true, handler: route(fleetExport as never) },
+		"fleet/seed": { public: true, handler: route(fleetSeed as never) },
 		"projects/backup": { handler: validated(backupSchema, projectBackup as never) },
 		"projects/backups": { handler: validated(withId, projectBackups as never) },
 		"projects/backup-delete": { handler: validated(backupKeySchema, projectBackupDelete as never) },

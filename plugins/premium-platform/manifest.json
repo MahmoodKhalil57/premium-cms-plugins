@@ -1,6 +1,6 @@
 {
 	"id": "premium-platform",
-	"version": "1.14.0",
+	"version": "1.14.1",
 	"capabilities": [
 		"network:request:unrestricted",
 		"users:read"
@@ -194,6 +194,10 @@
 		},
 		{
 			"name": "fleet/export",
+			"public": true
+		},
+		{
+			"name": "fleet/seed",
 			"public": true
 		}
 	],

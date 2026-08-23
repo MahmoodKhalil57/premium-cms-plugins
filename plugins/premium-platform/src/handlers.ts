@@ -653,3 +653,22 @@ export async function fleetExport(ctx: RouteContext<{ key?: string; project?: st
 	if (!res.ok) throw new Error(parsed.error ?? `HTTP ${res.status}`);
 	return { id: p.id, hostname: p.hostname, plugins: parsed.plugins ?? {} };
 }
+
+/**
+ * Apply a caller-supplied seed document straight to a project's /seed-api —
+ * the fast dev loop (themes repo bin/dev-theme.sh): a local theme seed goes
+ * live on its demo in seconds, no template-repo sync or CI. Auth: DEPLOY_KEY.
+ */
+export async function fleetSeed(ctx: RouteContext<{ key?: string; project?: string; seed?: Record<string, unknown> }>) {
+	const env = await loadEnv(ctx);
+	if (!env.DEPLOY_KEY || ctx.input.key !== env.DEPLOY_KEY) throw PluginRouteError.forbidden("unauthorized");
+	const id = String(ctx.input.project ?? "").trim();
+	if (!id) throw PluginRouteError.badRequest("project is required");
+	if (!ctx.input.seed || typeof ctx.input.seed !== "object" || Array.isArray(ctx.input.seed)) throw PluginRouteError.badRequest("seed must be a JSON seed document");
+	const p = (await listProjects(ctx)).find((x) => x.id === id);
+	if (!p?.provision_secret) throw PluginRouteError.notFound("Unknown project (or not provisioned)");
+	const res = await http(ctx, `https://${p.hostname}/seed-api`, { method: "POST", headers: { "x-provision-secret": p.provision_secret, "Content-Type": "application/json" }, body: JSON.stringify(ctx.input.seed) });
+	const parsed = JSON.parse(res.text || "{}") as { ok?: boolean; result?: unknown; plugins?: unknown; error?: string };
+	if (!res.ok || !parsed.ok) throw new Error(parsed.error ?? `seed-api HTTP ${res.status}`);
+	return { id: p.id, hostname: p.hostname, result: parsed.result, plugins: parsed.plugins };
+}
