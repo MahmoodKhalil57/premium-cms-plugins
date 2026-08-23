@@ -20,7 +20,7 @@ export async function resourceNames(ctx: PluginContext): Promise<Map<string, str
 
 export async function configHandler(ctx: RouteContext) {
 	const s = await loadSettings(ctx);
-	return { timezone: s.timezone, currency: s.currency, horizonDays: s.horizonDays, businessName: s.businessName, cancelHours: s.cancelHours, managePath: s.managePath };
+	return { timezone: s.timezone, currency: s.currency, horizonDays: s.horizonDays, businessName: s.businessName, cancelHours: s.cancelHours, managePath: s.managePath, host: { interop: Boolean(ctx.plugins), users: Boolean(ctx.users), email: Boolean(ctx.email), plugin: ctx.plugin } };
 }
 
 export async function servicesHandler(ctx: RouteContext<{ kind?: string }>) {
