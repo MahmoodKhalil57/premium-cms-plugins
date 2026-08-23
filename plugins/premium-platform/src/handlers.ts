@@ -568,3 +568,67 @@ export async function fleetDemos(ctx: RouteContext<{ key?: string; demos?: DemoS
 	}
 	return { done, failed, remaining: Math.max(0, actions.length - limit) + (actions.length ? 0 : 0), planned: actions.map((a) => `${a.id}:${a.step}`) };
 }
+
+/* ---- self-serve customers (signed-in users of the platform site) --------- */
+
+/** What the public site shows before sign-up: packs, what a project costs, unit prices. */
+export async function pricing(ctx: RouteContext) {
+	const env = await loadEnv(ctx);
+	const provider = paymentProvider(env);
+	const book = priceBook(env);
+	return {
+		signups: env.SIGNUPS_ENABLED !== "false",
+		provider,
+		canBuy: provider !== "none",
+		packsCents: accountPacks(env),
+		provisionFeeCents: provisionFeeCents(env),
+		preloadCents: preloadCents(env),
+		maxProjects: maxProjects(env),
+		markup: book.markup,
+		/** Charge per unit in micro-dollars (cost x markup). */
+		prices: Object.fromEntries(Object.entries(book.prices).map(([k, v]) => [k, v * book.markup])),
+	};
+}
+
+const maxProjects = (env: ProviderEnv) => Math.max(1, Math.round(Number(env.MAX_PROJECTS_PER_ACCOUNT) || 5));
+
+async function ownProject(ctx: RouteContext, id: string): Promise<ProjectRow> {
+	const project = await getProject(ctx, id);
+	if (!project || !ctx.user || project.owner_id !== ctx.user.id) throw PluginRouteError.notFound("No such project");
+	return project;
+}
+
+/** The signed-in customer's projects. */
+export async function meProjects(ctx: RouteContext) {
+	if (!ctx.user) throw PluginRouteError.forbidden("Sign in required");
+	const env = await loadEnv(ctx);
+	return { ...(await projectsList(ctx)), maxProjects: maxProjects(env) };
+}
+
+/** Create a project as a customer: account credits pay for it (see chargeProvisioning); capped per account. */
+export async function meProjectCreate(ctx: RouteContext<{ id: string; adminEmail: string; siteTitle: string; tagline?: string }>) {
+	if (!ctx.user) throw PluginRouteError.forbidden("Sign in required");
+	const env = await loadEnv(ctx);
+	if (env.SIGNUPS_ENABLED === "false") throw PluginRouteError.forbidden("Self-serve projects are paused right now");
+	const mine = (await listProjects(ctx)).filter((p) => p.owner_id === ctx.user!.id);
+	if (mine.length >= maxProjects(env)) throw PluginRouteError.badRequest(`You can have up to ${maxProjects(env)} projects on this account - contact us for more.`);
+	return projectCreate({ ...ctx, input: { ...ctx.input, adminEmail: ctx.input.adminEmail || ctx.user.email } } as typeof ctx);
+}
+
+/** Provisioning steps and deletion on a project the customer owns. */
+export async function meProjectStep(ctx: RouteContext<{ id: string; step: "deploy" | "domain" | "setup" | "destroy" }>) {
+	const project = await ownProject(ctx, ctx.input.id);
+	const env = await loadEnv(ctx);
+	switch (ctx.input.step) {
+		case "deploy":
+			return withError(ctx, project.id, async () => ({ project: publicProject(await deployWorker(ctx, env, project.id)) }));
+		case "domain":
+			return withError(ctx, project.id, async () => ({ project: publicProject(await attachDomain(ctx, env, project.id)) }));
+		case "setup":
+			return projectSetup({ ...ctx, input: { id: project.id } } as never);
+		case "destroy":
+			return withError(ctx, undefined, () => destroyProject(ctx, env, project.id));
+		default:
+			throw PluginRouteError.badRequest("unknown step");
+	}
+}

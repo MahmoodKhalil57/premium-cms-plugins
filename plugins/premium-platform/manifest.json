@@ -1,6 +1,6 @@
 {
 	"id": "premium-platform",
-	"version": "1.12.0",
+	"version": "1.13.0",
 	"capabilities": [
 		"network:request:unrestricted",
 		"users:read"
@@ -170,6 +170,27 @@
 		{
 			"name": "billing/overview",
 			"permission": "premium-platform:billing:manage"
+		},
+		{
+			"name": "pricing",
+			"public": true,
+			"cacheControl": "public, max-age=60"
+		},
+		{
+			"name": "me/credits",
+			"session": true
+		},
+		{
+			"name": "me/projects",
+			"session": true
+		},
+		{
+			"name": "me/projects/create",
+			"session": true
+		},
+		{
+			"name": "me/projects/step",
+			"session": true
 		}
 	],
 	"admin": {
@@ -395,6 +416,18 @@
 				"label": "Credit packs (cents)",
 				"description": "Amounts users can buy into their account, comma-separated.",
 				"default": "1000, 2500, 5000, 10000"
+			},
+			"MAX_PROJECTS_PER_ACCOUNT": {
+				"type": "string",
+				"label": "Projects per account",
+				"description": "How many projects a self-serve customer may create (the provider is not limited).",
+				"default": "5"
+			},
+			"SIGNUPS_ENABLED": {
+				"type": "string",
+				"label": "Self-serve projects (true/false)",
+				"description": "Set to false to pause new projects from the public site (existing ones keep running).",
+				"default": "true"
 			}
 		}
 	},

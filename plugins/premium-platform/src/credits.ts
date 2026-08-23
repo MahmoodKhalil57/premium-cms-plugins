@@ -94,7 +94,8 @@ export async function pushCreditsSettings(ctx: PluginContext, env: ProviderEnv, 
 	const book = priceBook(env);
 	await childSetOption(ctx, env, project.d1_id, "credits:prices", book.prices);
 	await childSetOption(ctx, env, project.d1_id, "credits:markup", book.markup);
-	await childSetOption(ctx, env, project.d1_id, "credits:enforce", env.CREDITS_ENFORCE === "true");
+	// Customer-owned projects always run metered: once their credits are gone, writes stop until they top up.
+	await childSetOption(ctx, env, project.d1_id, "credits:enforce", env.CREDITS_ENFORCE === "true" || Boolean(project.owner_id));
 }
 
 export async function grantCredits(ctx: PluginContext, env: ProviderEnv, project: ProjectRow, micros: number, ref: string, note: string, meta?: Record<string, unknown>): Promise<boolean> {

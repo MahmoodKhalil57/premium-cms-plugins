@@ -1,6 +1,6 @@
 {
 	"name": "premium-platform",
-	"version": "1.12.0",
+	"version": "1.13.0",
 	"private": true,
 	"type": "module",
 	"description": "PremiumCMS provider control plane \u2014 provisions isolated sibling instances, custom domains, branded email and GitHub frontends. Sandboxed, marketplace-installable (hidden listing).",

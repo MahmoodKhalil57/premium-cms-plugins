@@ -42,6 +42,8 @@ export interface ProviderEnv {
 	PROVISION_FEE_CENTS: string;
 	PROJECT_PRELOAD_CENTS: string;
 	ACCOUNT_PACKS_CENTS: string;
+	MAX_PROJECTS_PER_ACCOUNT: string;
+	SIGNUPS_ENABLED: string;
 	/** This provider's own origin (children call back here). */
 	EMDASH_SITE_URL: string;
 }
@@ -76,6 +78,8 @@ export const SETTING_KEYS = [
 	"PROVISION_FEE_CENTS",
 	"PROJECT_PRELOAD_CENTS",
 	"ACCOUNT_PACKS_CENTS",
+	"MAX_PROJECTS_PER_ACCOUNT",
+	"SIGNUPS_ENABLED",
 ] as const;
 
 export const CREDENTIALS_HINT = "Provider credentials not configured — open Plugins → Platform → Settings and add them.";
