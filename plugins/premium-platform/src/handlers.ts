@@ -351,7 +351,8 @@ export async function fleetSync(ctx: RouteContext<{ key?: string; op?: string; p
 	// Between the deploy and setup passes a project sits in "deployed"; both are fleet-eligible.
 	const ELIGIBLE = new Set(["live", "deployed", "domain"]);
 	const all = (await listProjects(ctx)).filter((p) => ELIGIBLE.has(p.status) && p.provision_secret).sort((a, b) => a.id.localeCompare(b.id));
-	const wanted = all.filter((p) => (!ctx.input.projects?.length || ctx.input.projects.includes(p.id)) && (op !== "themes" || (ctx.input.themes?.length ? ctx.input.themes.includes(p.theme_id ?? "") : Boolean(p.theme_id))));
+	// `themes` narrows any op to projects on those themes; the themes op without it means every themed project.
+	const wanted = all.filter((p) => (!ctx.input.projects?.length || ctx.input.projects.includes(p.id)) && (ctx.input.themes?.length ? ctx.input.themes.includes(p.theme_id ?? "") : op !== "themes" || Boolean(p.theme_id)));
 	const pending = ctx.input.after ? wanted.filter((p) => p.id > ctx.input.after!) : wanted;
 	const batch = pending.slice(0, limit);
 	const done: Array<{ id: string; result: unknown }> = [];

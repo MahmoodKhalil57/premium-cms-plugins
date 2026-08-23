@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Ask the apex platform plugin to apply a change to every live project.
 #   bin/fleet-sync.sh bundle                 # redeploy + setup on the latest bundle
-#   bin/fleet-sync.sh plugins [id,id…]       # update installed marketplace plugins (+ install these)
-#   bin/fleet-sync.sh themes  [theme,theme…] # re-apply theme seeds
+#   bin/fleet-sync.sh plugins [id,id…] [theme,theme…]  # update installed marketplace plugins (+ install these), optionally only on projects of these themes
+#   bin/fleet-sync.sh themes  [theme,theme…]           # re-apply theme seeds
 # env: PLATFORM_URL (default https://premium-cms.com), DEPLOY_KEY
 set -euo pipefail
-OP="${1:-bundle}"; LIST="${2:-}"
+OP="${1:-bundle}"; LIST="${2:-}"; THEMES="${3:-}"
 URL="${PLATFORM_URL:-https://premium-cms.com}/_emdash/api/plugins/premium-platform/fleet/sync"
 [ -n "${DEPLOY_KEY:-}" ] || { echo "DEPLOY_KEY is not set"; exit 1; }
 run_op() {
@@ -13,12 +13,14 @@ OP="$1"; after=""; failed=0
 while :; do
   body=$(python3 -c "
 import json,sys,os
-op, lst, after = sys.argv[1:4]
+op, lst, after, themes = sys.argv[1:5]
 b = {'key': os.environ['DEPLOY_KEY'], 'op': op, 'limit': 3 if op == 'plugins' else 1}
 if after: b['after'] = after
 items = [x for x in lst.split(',') if x]
 if items: b['install' if op == 'plugins' else 'themes'] = items
-print(json.dumps(b))" "$OP" "$LIST" "$after")
+th = [x for x in themes.split(',') if x]
+if th: b['themes'] = th
+print(json.dumps(b))" "$OP" "$LIST" "$after" "$THEMES")
   attempt=0
   while :; do
     res=$(curl -sS --max-time 300 -X POST "$URL" -H "Content-Type: application/json" -H "X-EmDash-Request: 1" -d "$body")
