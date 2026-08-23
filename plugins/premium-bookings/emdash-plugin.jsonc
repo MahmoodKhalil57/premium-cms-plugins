@@ -1,0 +1,9 @@
+{
+	"slug": "premium-bookings",
+	"name": "Bookings",
+	"description": "Appointments and reservations for any business: services with duration, price and deposit; staff (your CMS users) and resources (rooms, tables, chairs) with weekly hours and time off; a slot engine in your time zone; holds that expire; deposits and payment through the Commerce plugin; intake forms; reminder, recall and no-show emails.",
+	"license": "MIT",
+	"author": { "name": "PremiumCMS" },
+	"keywords": ["bookings", "appointments", "reservations", "scheduling", "staff", "deposits", "reminders"],
+	"homepage": "https://premium-cms.com"
+}

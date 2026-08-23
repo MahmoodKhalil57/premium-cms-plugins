@@ -2,15 +2,24 @@
  * premium-commerce data model.
  *
  * Products live in the CMS (`products` collection, seeded by the frontend
- * template); the plugin owns orders and inventory counters in plugin storage.
- * All money is in minor units (cents) of the store currency.
+ * template); the plugin owns orders, carts, customers, discounts and
+ * inventory counters in plugin storage. All money is in minor units (cents)
+ * of the store currency.
+ *
+ * Other plugins take part in an order in two ways (see README § Interop):
+ *  - provider lines: an item whose `productId` is `<pluginId>:<ref>` is priced
+ *    by that plugin (`commerce/line`), e.g. an appointment deposit;
+ *  - checkout extensions: `extensions[pluginId]` in the checkout body is
+ *    validated by that plugin (`commerce/checkout`), which may add
+ *    adjustments (fees, tips) and keep public-safe meta on the order.
+ * Every state change is published as a `premium-commerce:order.*` event.
  */
 
 import type { DesignDoc, FormField } from "./fields.js";
 
 export type OrderStatus =
-	| "pending" // checkout started, stock reserved, awaiting Stripe
-	| "awaiting_payment" // manual payment method: order placed, pay offline
+	| "pending" // checkout started, stock reserved, awaiting the provider
+	| "awaiting_payment" // pay-later: order placed, money collected offline
 	| "paid"
 	| "fulfilled"
 	| "cancelled"
@@ -42,6 +51,9 @@ export interface OrderItem {
 	customization?: Customization;
 	/** Inventory rows this line draws from: the product and any tracked choices. */
 	stockKeys?: string[];
+	/** Provider line: the plugin that priced it and what it refers to. */
+	provider?: string;
+	ref?: string;
 }
 
 export interface Customization {
@@ -53,35 +65,24 @@ export interface Customization {
 	uploads?: Record<string, string>;
 }
 
+/** Amounts other than items: delivery fee, service charge, tip … (minor units; negative = reduction). */
+export interface OrderAdjustment {
+	label: string;
+	amount: number;
+	/** Plugin that added it. */
+	provider?: string;
+	/** Stable key for the provider ("delivery", "tip"). */
+	key?: string;
+}
 
-export type FulfilmentMode = "delivery" | "pickup" | "dine_in" | "pos";
-export type KitchenStatus = "new" | "preparing" | "ready" | "served" | "out_for_delivery" | "delivered" | "completed" | "cancelled";
-export interface Fulfilment {
-	mode: FulfilmentMode;
-	/** Requested time (ISO) or null for ASAP. */
-	at: string | null;
-	label?: string;
-	table?: { id: string; name: string } | null;
-	zone?: { id: string; name: string; fee: number } | null;
-	deliveryFee: number;
-	serviceCharge: number;
-	tip: number;
-	/** Guest chose to pay later at the table / counter / door. */
-	payLater: boolean;
-	kitchen: KitchenStatus;
-	driverId?: string | null;
-	driverName?: string | null;
-	/** POS: who rang it up and on which cash-drawer shift. */
-	staffId?: string | null;
-	staffName?: string | null;
-	shiftId?: string | null;
-	/** POS settlement. */
-	paidVia?: "cash" | "card_terminal" | "online" | "unpaid";
+/** Money taken outside the PSP (till, terminal, bank transfer). */
+export interface OfflinePayment {
+	method: string;
 	tendered?: number;
 	change?: number;
-	paymentNote?: string;
-	readyAt?: string | null;
-	completedAt?: string | null;
+	note?: string;
+	/** Who took it (staff name / user id). */
+	by?: string;
 }
 
 export interface OrderEvent {
@@ -100,12 +101,9 @@ export interface Order {
 	shipping: number;
 	tax: number;
 	discount: number;
+	adjustments?: OrderAdjustment[];
 	/** Deposit orders: the full amount and what is still owed. */
 	paymentPlan?: { fullAmount: number; depositAmount: number; balanceDue: number; balanceStatus: "due" | "paid" | "waived"; balanceRef?: string | null; balanceOrderId?: string | null } | null;
-	/** Bookings confirmed by this order. */
-	bookingIds?: string[];
-	/** Restaurant orders: how and when the food reaches the guest, and where it is in the kitchen. */
-	fulfilment?: Fulfilment | null;
 	/** Coupon applied at checkout, if any. */
 	coupon?: { id: string; code: string; title: string; freeShipping: boolean } | null;
 	total: number;
@@ -118,6 +116,11 @@ export interface Order {
 	userId?: string | null;
 	/** Server-side cart this order came from. */
 	cartId?: string | null;
+	/** Where it was placed: web (default), pos, phone … */
+	channel?: string;
+	/** Public-safe state other plugins keep on the order (`extensions[pluginId]`). */
+	extensions?: Record<string, unknown>;
+	offline?: OfflinePayment | null;
 	note?: string;
 	tracking?: string;
 	sessionId?: string;
@@ -226,7 +229,7 @@ export interface Product {
 	options?: FormField[];
 	summary?: string;
 	image?: unknown;
-	/** Menu fields (restaurant themes): grouping, kitchen station, dietary tags, availability. */
+	/** Grouping / routing fields other plugins use (menu category, kitchen station, dietary tags, availability). */
 	category?: string;
 	station?: string;
 	tags?: string[];
@@ -246,12 +249,6 @@ export interface StoreSettings {
 	allowManualPayment: boolean;
 	/** Shoppers may sign in (email link) to save addresses and reuse payment methods. */
 	customerAccounts: boolean;
-	/** Bookings */
-	bookingTimezone: string;
-	slotIntervalMin: number;
-	leadTimeHours: number;
-	horizonDays: number;
-	holdMinutes: number;
 	notifyEmail: string;
 	storeName: string;
 	automaticTax: boolean;
@@ -261,42 +258,42 @@ export interface StoreSettings {
 	collectPhone: boolean;
 	successPath: string;
 	cancelPath: string;
-	/** Restaurant */
-	restaurantMode: boolean;
-	fulfilmentModes: FulfilmentMode[];
-	openingHours: string;
-	prepTimeMin: number;
-	deliveryZones: DeliveryZone[];
-	pickupLeadMin: number;
-	orderSlotIntervalMin: number;
-	maxOrdersPerSlot: number;
-	tipPresets: number[];
-	serviceChargePct: number;
-	allowPayAtTable: boolean;
-	allowPayOnCollection: boolean;
-	qrOrdering: boolean;
-	kdsStations: string[];
-	printnodeApiKey: string;
-	receiptHeader: string;
-	receiptFooter: string;
-	reservationsEnabled: boolean;
-	turnTimeMin: number;
-	maxPartySize: number;
-	reservationLeadMin: number;
+}
+
+/* ---- interop contracts (what sibling plugins implement / receive) --------- */
+
+/** Answer of `<plugin>/commerce/line` for a provider line `<plugin>:<ref>`. */
+export interface ProviderLine {
+	title: string;
+	/** Minor units; with a deposit this is the deposit, `fullAmount` the whole price. */
+	unitAmount: number;
+	quantity?: number;
+	fullAmount?: number;
+	depositAmount?: number;
+	sku?: string;
+	display?: Array<{ name: string; label: string; value: string }>;
+}
+
+/** Answer of `<plugin>/commerce/checkout` for `extensions[plugin]`. */
+export interface CheckoutExtension {
+	adjustments?: Array<{ label: string; amount: number; key?: string }>;
+	/** Public-safe state kept at `order.extensions[plugin]` (shown on the receipt page). */
+	meta?: unknown;
+	/** The plugin vouches for pay-later on this order (e.g. pay at the table). */
+	allowPayLater?: boolean;
+	/** Default true; false when the plugin can reach the customer otherwise (dine-in). */
+	requireEmail?: boolean;
+	/** Shown on emails / receipts. */
+	summary?: string;
+}
+
+export type OrderEventName = "order.created" | "order.paid" | "order.fulfilled" | "order.cancelled" | "order.refunded";
+export interface OrderEventPayload {
+	id: string;
+	order: Order;
 }
 
 export interface CheckoutRequestItem {
 	productId: string;
 	quantity: number;
-}
-
-export interface DeliveryZone {
-	id: string;
-	name: string;
-	/** Postcode / ZIP prefixes (case-insensitive, spaces ignored); "*" matches everything. */
-	postcodes: string[];
-	/** Major units in the store currency. */
-	fee: number;
-	minimum: number;
-	etaMin: number;
 }

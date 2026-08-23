@@ -34,6 +34,7 @@ export const CURRENT_PLUGIN_CAPABILITIES = [
 	"media:write",
 	"users:read",
 	"email:send",
+	"plugins:call",
 	"hooks.email-transport:register",
 	"hooks.email-events:register",
 	"hooks.page-fragments:register",
@@ -115,6 +116,7 @@ export const HOOK_NAMES = [
 	"comment:afterModerate",
 	"page:metadata",
 	"page:fragments",
+	"plugin:event",
 ] as const;
 
 /**
@@ -126,6 +128,8 @@ const manifestHookEntrySchema = z.object({
 	exclusive: z.boolean().optional(),
 	priority: z.number().int().optional(),
 	timeout: z.number().int().positive().optional(),
+	/** `plugin:event` only: event names to receive (`<pluginId>:<event>`; empty = all). */
+	events: z.array(z.string().min(1).max(120)).max(50).optional(),
 });
 
 /**
@@ -141,6 +145,8 @@ const manifestRouteEntrySchema = z.object({
 	public: z.boolean().optional(),
 	/** Any signed-in user may call it (no grant needed) — for customer-facing plugin features. */
 	session: z.boolean().optional(),
+	/** Plugin ids allowed to invoke the route through `ctx.plugins.call` (`*` = any plugin). */
+	callers: z.array(z.string().min(1).max(80)).max(20).optional(),
 	permission: z
 		.string()
 		.refine((permission) => permission in Permissions || GRANT_KEY_RE.test(permission), "Unknown permission")
@@ -392,13 +398,14 @@ export function normalizeManifestHook(
  * Normalize a manifest route entry — plain strings become `{ name }` objects.
  */
 export function normalizeManifestRoute(
-	entry: string | { name: string; public?: boolean; session?: boolean; permission?: string; cacheControl?: string },
+	entry: string | { name: string; public?: boolean; session?: boolean; permission?: string; cacheControl?: string; callers?: string[] },
 ): {
 	name: string;
 	public?: boolean;
 	session?: boolean;
 	permission?: string;
 	cacheControl?: string;
+	callers?: string[];
 } {
 	if (typeof entry === "string") {
 		return { name: entry };

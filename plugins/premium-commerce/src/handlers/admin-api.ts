@@ -5,7 +5,7 @@
 
 import { available, inventory, inventoryFor, listProducts } from "../catalog.js";
 import { formatMoney } from "../money.js";
-import { cancelOrder, event, orders, saveOrder } from "../orders.js";
+import { cancelOrder, emitOrderEvent, event, orders, saveOrder, stockLines } from "../orders.js";
 import { loadSettings } from "../settings.js";
 import type { RouteContext } from "../shim.js";
 import { PluginRouteError } from "../shim.js";
@@ -56,11 +56,18 @@ export async function orderUpdateHandler(ctx: RouteContext<{ id: string; status?
 			await cancelOrder(ctx, ctx.input.id, order, ctx.input.note ?? "cancelled by admin");
 		} else if (ctx.input.status === "paid" && (order.status === "awaiting_payment" || order.status === "pending")) {
 			const { commitStock } = await import("../catalog.js");
-			await commitStock(ctx, order.items);
+			await commitStock(ctx, stockLines(order));
 			order.status = "paid";
 			order.paidAt = new Date().toISOString();
 			order.expiresAt = undefined;
 			order.events.push(event("paid", ctx.input.note ?? "marked paid by admin"));
+			await saveOrder(ctx, ctx.input.id, order);
+			await emitOrderEvent(ctx, "order.paid", ctx.input.id, order);
+		} else if (ctx.input.status === "fulfilled") {
+			order.status = "fulfilled";
+			order.events.push(event("fulfilled", ctx.input.note));
+			await saveOrder(ctx, ctx.input.id, order);
+			await emitOrderEvent(ctx, "order.fulfilled", ctx.input.id, order);
 		} else {
 			order.status = ctx.input.status;
 			order.events.push(event(ctx.input.status, ctx.input.note));
@@ -103,11 +110,12 @@ export async function orderRefundHandler(ctx: RouteContext<{ id: string; amount?
 	const full = !ctx.input.amount || ctx.input.amount >= order.total;
 	if (full) {
 		const { restock } = await import("../catalog.js");
-		await restock(ctx, order.items);
+		await restock(ctx, stockLines(order));
 		order.status = "refunded";
 	}
 	order.events.push(event("refund", `${refund.id} ${formatMoney(refund.amount, order.currency)}`));
 	await saveOrder(ctx, ctx.input.id, order);
+	if (full) await emitOrderEvent(ctx, "order.refunded", ctx.input.id, order);
 	await recordTransaction(ctx, ctx.input.id, order, { provider: order.paymentMethod, kind: "refund", amount: refund.amount, status: refund.status, providerRef: refund.id }).catch(() => undefined);
 	return { id: ctx.input.id, refund, order };
 }

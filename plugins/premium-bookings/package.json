@@ -1,0 +1,17 @@
+{
+	"name": "premium-bookings",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Bookings for PremiumCMS sites — services, staff (CMS users) and resources, availability, holds, deposits through Commerce, intake forms, reminders and recalls.",
+	"exports": {
+		".": "./src/index.ts",
+		"./sandbox": "./src/sandbox-entry.ts"
+	},
+	"scripts": {
+		"build": "bash ../../bin/build.sh premium-bookings"
+	},
+	"dependencies": {
+		"ulidx": "^2.4.1"
+	}
+}

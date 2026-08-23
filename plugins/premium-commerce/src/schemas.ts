@@ -7,6 +7,7 @@ const addressSchema = v.object({ id: v.string({ max: 64 }).optional(), label: ad
 export const checkoutSchema = v.object({
 	items: v.array(
 		v.object({
+			/** A CMS product (id or slug) or a provider line `<pluginId>:<ref>`. */
 			productId: id,
 			quantity: v.number({ int: true, min: 1, max: 999 }),
 			options: v.record(v.unknown()).optional(),
@@ -34,18 +35,8 @@ export const checkoutSchema = v.object({
 	paymentMethodId: v.string({ max: 64 }).optional(),
 	savePaymentMethod: v.boolean().optional(),
 	couponCode: v.string({ max: 40 }).optional(),
-	/** Restaurant orders: how the food reaches the guest. */
-	fulfilment: v
-		.object({
-			mode: v.enumOf(["delivery", "pickup", "dine_in"] as const),
-			at: v.string({ max: 40 }).optional(),
-			tableCode: v.string({ max: 20 }).optional(),
-			postcode: v.string({ max: 20 }).optional(),
-			tipPercent: v.number({ min: 0, max: 100 }).optional(),
-			tipAmount: v.number({ min: 0 }).optional(),
-			payLater: v.boolean().optional(),
-		})
-		.optional(),
+	/** Per-plugin checkout data (`{ "premium-restaurant": { mode, … } }`), validated by that plugin. */
+	extensions: v.record(v.unknown()).optional(),
 });
 export type CheckoutInput = {
 	items: Array<{ productId: string; quantity: number; options?: Record<string, unknown>; customization?: { design?: unknown; previewMediaId?: string } }>;
@@ -66,7 +57,7 @@ export type CheckoutInput = {
 	paymentMethodId?: string;
 	savePaymentMethod?: boolean;
 	couponCode?: string;
-	fulfilment?: { mode: "delivery" | "pickup" | "dine_in"; at?: string; tableCode?: string; postcode?: string; tipPercent?: number; tipAmount?: number; payLater?: boolean };
+	extensions?: Record<string, unknown>;
 };
 export type AddressInput = { id?: string; label?: string; name?: string; line1?: string; line2?: string; city?: string; state?: string; postalCode?: string; country?: string; phone?: string; isDefault?: boolean };
 
@@ -116,22 +107,26 @@ export const discountPreviewSchema = v.object({
 });
 export const discountSaveSchema = v.object({ id: v.string({ max: 64 }).optional(), discount: v.record(v.unknown()) });
 export const discountDeleteSchema = v.object({ id: v.string({ min: 1, max: 64 }) });
-
-/* ---- bookings --------------------------------------------------------------- */
-export const availabilitySlotsSchema = v.object({ serviceId: id, date: v.string({ min: 10, max: 10 }), staffId: v.string({ max: 64 }).optional() });
-export const holdSchema = v.object({
-	serviceId: id,
-	staffId: v.string({ max: 64 }).optional(),
-	startsAt: v.string({ min: 10, max: 40 }),
-	customer: v.object({ name: v.string({ min: 1, max: 200 }), email: v.string({ email: true }), phone: v.string({ max: 50 }).optional() }),
-	notes: v.string({ max: 2000 }).optional(),
-	intakeSubmissionId: v.string({ max: 64 }).optional(),
-});
-export const bookingLookupSchema = v.object({ id: id, token: v.string({ min: 1, max: 64 }).optional() });
-export const bookingCancelSchema = v.object({ id: id, token: v.string({ max: 64 }).optional() });
-export const bookingUpdateSchema = v.object({ id: id, status: v.enumOf(["confirmed", "cancelled", "completed", "no_show"] as const).optional(), startsAt: v.string({ max: 40 }).optional(), staffId: v.string({ max: 64 }).optional(), notes: v.string({ max: 2000 }).optional() });
-export const bookingsListSchema = v.object({ from: v.string({ max: 40 }).optional(), to: v.string({ max: 40 }).optional(), status: v.string().optional(), limit: v.number({ int: true, min: 1, max: 500 }).default(200) });
-export const recordSaveSchema = v.object({ id: v.string({ max: 64 }).optional(), record: v.record(v.unknown()) });
-export const recordDeleteSchema = v.object({ id: v.string({ min: 1, max: 64 }) });
 export const collectBalanceSchema = v.object({ id, mode: v.enumOf(["saved_card", "pay_link", "waive"] as const).default("pay_link") });
-export const automationRunSchema = v.object({ id: v.string({ max: 64 }).optional(), dryRun: v.boolean().default(false) });
+
+/* ---- internal (sibling plugins) --------------------------------------------- */
+const adjustment = v.object({ label: v.string({ min: 1, max: 80 }), amount: v.number({ int: true }), key: v.string({ max: 40 }).optional() });
+export const internalOrderSchema = v.object({ id: v.string({ max: 64 }).optional(), number: v.or(v.string(), v.number()).optional(), token: v.string({ max: 120 }).optional() });
+export const internalOrdersSchema = v.object({ status: v.string({ max: 30 }).optional(), channel: v.string({ max: 30 }).optional(), limit: v.number({ int: true, min: 1, max: 300 }).default(100), sinceHours: v.number({ min: 0, max: 24 * 90 }).optional() });
+export const internalCreateOrderSchema = v.object({
+	items: v.array(v.object({ productId: id, quantity: v.number({ int: true, min: 1, max: 999 }), options: v.record(v.unknown()).optional(), notes: v.string({ max: 300 }).optional() }), { min: 1 }),
+	adjustments: v.array(adjustment).optional(),
+	/** Minor units off the subtotal (manual discount). */
+	discount: v.number({ int: true, min: 0 }).optional(),
+	customer: v.object({ name: v.string({ max: 200 }).optional(), email: v.string({ max: 200 }).optional(), phone: v.string({ max: 50 }).optional() }).optional(),
+	note: v.string({ max: 2000 }).optional(),
+	channel: v.string({ min: 1, max: 30 }).default("pos"),
+	paid: v.boolean().default(false),
+	offline: v.object({ method: v.string({ min: 1, max: 40 }), tendered: v.number({ int: true, min: 0 }).optional(), note: v.string({ max: 200 }).optional(), by: v.string({ max: 120 }).optional() }).optional(),
+	extensions: v.record(v.unknown()).optional(),
+	sendEmails: v.boolean().default(true),
+});
+export const internalSettleSchema = v.object({ id, offline: v.object({ method: v.string({ min: 1, max: 40 }), tendered: v.number({ int: true, min: 0 }).optional(), note: v.string({ max: 200 }).optional(), by: v.string({ max: 120 }).optional() }), adjustments: v.array(adjustment).optional() });
+export const internalCancelSchema = v.object({ id, note: v.string({ max: 300 }).optional() });
+export const internalFulfilSchema = v.object({ id, note: v.string({ max: 300 }).optional() });
+export const internalExtensionSchema = v.object({ id, meta: v.unknown() });

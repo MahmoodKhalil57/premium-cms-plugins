@@ -2,11 +2,11 @@
 export function premiumCommerce() {
 	return {
 		id: "premium-commerce",
-		version: "0.8.1",
+		version: "1.0.0",
 		format: "standard" as const,
 		entrypoint: "premium-commerce/sandbox",
 		options: {},
-		capabilities: ["content:read", "network:request", "email:send"],
+		capabilities: ["content:read", "network:request", "email:send", "plugins:call"],
 		allowedHosts: ["api.stripe.com"],
 	};
 }

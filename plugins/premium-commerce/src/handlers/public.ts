@@ -1,28 +1,26 @@
 /**
  * Visitor-facing routes: catalog, availability, checkout, confirm, webhook,
- * order lookup. No authentication — everything is validated against the CMS
- * and Stripe server-side.
+ * order lookup. No authentication — everything is validated against the CMS,
+ * the payment provider and the sibling plugins that price provider lines or
+ * validate checkout extensions.
  */
 
 import { available, availableForChoice, getProduct, inventoryFor, listProducts, reserveStock, stockKeysOf } from "../catalog.js";
 import { type DesignDoc, designToSvg } from "../fields.js";
-import { cancelOrder, event, findBySession, finalizeFromPaymentIntent, finalizeFromSession, newOrderId, nextOrderNumber, orders, PENDING_TTL_MS, publicOrder, randomToken, saveOrder, sendOrderEmails } from "../orders.js";
+import { cancelOrder, emitOrderEvent, event, findBySession, finalizeFromPaymentIntent, finalizeFromSession, newOrderId, nextOrderNumber, orders, PENDING_TTL_MS, publicOrder, randomToken, saveOrder, sendOrderEmails, stockLines } from "../orders.js";
 import { lineSummary, resolveLine } from "../pricing.js";
-import { type BookingRecord, bookingLine, bookings, occupies, setBookingStatus } from "../bookings.js";
 import { guestCartId, markConverted, userCartId } from "../carts.js";
 import { applyDiscounts, automaticSale, liveDiscounts, recordCouponUse } from "../discounts.js";
 import { customers, ensurePolarCustomer, ensureStripeCustomer, getCustomer, normalizeAddress, rememberPaymentMethod, saveCustomer, upsertAddress } from "../customers.js";
 import { recordTransaction } from "../transactions.js";
 import { checkoutToSession, Polar } from "../polar.js";
 import type { AddressInput, CheckoutInput } from "../schemas.js";
-import { matchZone, onRestaurantOrderCommitted, tableByCode } from "../restaurant.js";
-import type { Fulfilment } from "../types.js";
-import { formatMoney, minorUnits } from "../money.js";
+import { formatMoney } from "../money.js";
 import { loadSettings } from "../settings.js";
 import type { RouteContext, UserInfo } from "../shim.js";
 import { PluginRouteError } from "../shim.js";
 import { Stripe, type StripePaymentIntent, type StripeSession } from "../stripe.js";
-import type { Address, Order, OrderItem } from "../types.js";
+import type { Address, CheckoutExtension, Order, OrderAdjustment, OrderItem, ProviderLine } from "../types.js";
 
 export async function catalogHandler(ctx: RouteContext) {
 	const settings = await loadSettings(ctx);
@@ -83,16 +81,46 @@ export async function accountCheckoutHandler(ctx: RouteContext<CheckoutInput>) {
 
 const addressFor = (a: Address | undefined) => (a ? { name: a.name, line1: a.line1, line2: a.line2, city: a.city, state: a.state, postalCode: a.postalCode, country: a.country, phone: a.phone } : undefined);
 
+/** `<pluginId>:<ref>` → provider line (plugin ids are kebab-case; product ids/slugs never contain a colon). */
+export function providerRef(productId: string): { provider: string; ref: string } | null {
+	const m = /^([a-z][a-z0-9-]{1,60}):(.+)$/.exec(productId);
+	if (!m || m[1] === "balance") return null;
+	return { provider: m[1]!, ref: m[2]! };
+}
+
+/** Ask the owning plugin what a provider line is and costs right now. */
+export async function resolveProviderLine(ctx: RouteContext, productId: string, quantity: number, who: { email?: string; userId?: string | null }): Promise<OrderItem & { fullAmount: number; depositAmount: number }> {
+	const pr = providerRef(productId);
+	if (!pr) throw PluginRouteError.badRequest(`Product not available: ${productId}`);
+	if (!ctx.plugins) throw PluginRouteError.internal("Plugin interop is not available");
+	let r: ProviderLine | null;
+	try {
+		r = await ctx.plugins.call<ProviderLine | null>(pr.provider, "commerce/line", { ref: pr.ref, quantity, email: who.email, userId: who.userId ?? null });
+	} catch (err) {
+		throw PluginRouteError.badRequest(err instanceof Error ? err.message : "That item is no longer available");
+	}
+	if (!r || typeof r.unitAmount !== "number" || !r.title) throw PluginRouteError.badRequest("That item is no longer available");
+	if (r.unitAmount <= 0) throw PluginRouteError.badRequest(`${r.title} does not need payment`);
+	const dep = Math.max(0, Math.round(r.depositAmount ?? 0));
+	const full = Math.max(r.unitAmount, Math.round(r.fullAmount ?? r.unitAmount));
+	return {
+		productId,
+		slug: `${pr.provider}-${pr.ref}`.slice(0, 120),
+		title: r.title,
+		sku: r.sku,
+		unitAmount: Math.round(r.unitAmount),
+		quantity: Math.max(1, Math.round(r.quantity ?? quantity)),
+		requiresShipping: false,
+		provider: pr.provider,
+		ref: pr.ref,
+		...(r.display?.length ? { optionsDisplay: r.display } : {}),
+		fullAmount: full,
+		depositAmount: dep,
+	};
+}
+
 async function createCheckout(ctx: RouteContext, input: CheckoutInput, user: UserInfo | null) {
 	const settings = await loadSettings(ctx);
-	const fin = input.fulfilment;
-	if (fin && !settings.restaurantMode) throw PluginRouteError.badRequest("Restaurant ordering is not enabled");
-	if (settings.restaurantMode && !fin) throw PluginRouteError.badRequest("Choose delivery, pickup or dine-in");
-	const restaurantPayLater = Boolean(fin && (fin.mode === "dine_in" ? settings.allowPayAtTable : settings.allowPayOnCollection));
-	if (input.method === "manual" && !settings.allowManualPayment && !restaurantPayLater) throw PluginRouteError.badRequest("Pay-later orders are not enabled");
-	// Any online method resolves to the store's configured provider.
-	const method = input.method === "manual" ? ("manual" as const) : settings.paymentProvider;
-	if (method === "none") throw PluginRouteError.badRequest("Online payment is not configured yet");
 
 	// Account context: saved addresses / cards, and the PSP customer the order is tied to.
 	const customer = user ? await getCustomer(ctx, user) : null;
@@ -110,6 +138,7 @@ async function createCheckout(ctx: RouteContext, input: CheckoutInput, user: Use
 		for (const a of [shippingAddress, billingAddress]) if (a && !customer.addresses.some((x) => x.id === a.id)) upsertAddress(customer, a);
 		await saveCustomer(ctx, customer);
 	}
+	const email = input.email ?? customer?.email ?? "";
 
 	// Merge duplicate lines (same product, same options, same design), resolve every product from the CMS.
 	const lineKey = (it: (typeof input.items)[number]) => `${it.productId}|${JSON.stringify(Object.entries(it.options ?? {}).sort())}|${it.customization ? JSON.stringify(it.customization) : ""}`;
@@ -123,23 +152,18 @@ async function createCheckout(ctx: RouteContext, input: CheckoutInput, user: Use
 	const products = await listProducts(ctx, settings.currency);
 	const items: OrderItem[] = [];
 	const resolved = new Map<string, (typeof products)[number]>();
-	// Bookings are lines too: `booking:<id>` for a held slot — priced at the deposit (or full price) of the service.
-	const bookingIds: string[] = [];
+	// Provider lines (`<pluginId>:<ref>`) are priced by the plugin that owns them — a deposit makes the order a payment plan.
 	const planAcc = { full: 0, dep: 0, bal: 0, any: false };
 	for (const line of lines.values()) {
-		if (line.productId.startsWith("booking:")) {
-			const bid = line.productId.slice(8);
-			const b = await bookings(ctx).get(bid);
-			if (!b || !occupies(b) || b.orderId || (b.status !== "held" && b.status !== "pending_payment")) throw PluginRouteError.conflict("That appointment hold has expired — please pick a slot again");
-			if (b.price <= 0) throw PluginRouteError.badRequest("This appointment does not need payment");
-			const bl = bookingLine(bid, b, settings.currency, settings.bookingTimezone);
-			items.push({ productId: line.productId, slug: `booking-${bid}`, title: bl.title, unitAmount: bl.unitAmount, quantity: 1, requiresShipping: false, optionsDisplay: [{ name: "when", label: "When", value: bl.title.split(" — ")[1] ?? "" }] });
-			bookingIds.push(bid);
-			if (bl.depositAmount > 0) {
+		if (providerRef(line.productId)) {
+			const pl = await resolveProviderLine(ctx, line.productId, line.quantity, { email, userId: user?.id ?? null });
+			const { fullAmount, depositAmount, ...item } = pl;
+			items.push(item);
+			if (depositAmount > 0) {
 				planAcc.any = true;
-				planAcc.full += bl.fullAmount;
-				planAcc.dep += bl.depositAmount;
-				planAcc.bal += bl.fullAmount - bl.depositAmount;
+				planAcc.full += fullAmount * item.quantity;
+				planAcc.dep += item.unitAmount * item.quantity;
+				planAcc.bal += (fullAmount - item.unitAmount) * item.quantity;
 			}
 			continue;
 		}
@@ -165,7 +189,7 @@ async function createCheckout(ctx: RouteContext, input: CheckoutInput, user: Use
 	}
 	// Availability (best effort — there are no transactions in plugin storage): per product and per tracked choice.
 	const need = new Map<string, number>();
-	for (const it of items) if (!it.productId.startsWith("booking:")) for (const key of stockKeysOf(it)) need.set(key, (need.get(key) ?? 0) + it.quantity);
+	for (const it of items) if (!it.provider) for (const key of stockKeysOf(it)) need.set(key, (need.get(key) ?? 0) + it.quantity);
 	const inv = await inventoryFor(ctx, [...need.keys()]);
 	for (const [key, quantity] of need) {
 		const [productId, choice] = key.split("#", 2) as [string, string | undefined];
@@ -181,12 +205,12 @@ async function createCheckout(ctx: RouteContext, input: CheckoutInput, user: Use
 		if (a !== null && a < quantity) throw PluginRouteError.conflict(a === 0 ? `${what} is sold out` : `Only ${a} of ${what} left`);
 	}
 
-	// Discounts: automatic promotions per line, then the coupon (if any) — all from the records, never the client.
-	const priced = await applyDiscounts(ctx, items.map((it) => ({ productId: it.productId, slug: it.slug, quantity: it.quantity, unitAmount: it.productId.startsWith("booking:") ? 0 : it.unitAmount })), settings.currency, { code: input.couponCode, customerKey: user?.id ?? input.email?.toLowerCase() ?? null });
+	// Discounts: automatic promotions per line, then the coupon (if any) — all from the records, never the client. Provider lines are never discounted.
+	const priced = await applyDiscounts(ctx, items.map((it) => ({ productId: it.productId, slug: it.slug, quantity: it.quantity, unitAmount: it.provider ? 0 : it.unitAmount })), settings.currency, { code: input.couponCode, customerKey: user?.id ?? email.toLowerCase() ?? null });
 	if (input.couponCode && priced.couponError) throw PluginRouteError.badRequest(priced.couponError);
 	for (const [i, it] of items.entries()) {
 		const pl = priced.lines[i]!;
-		if (it.productId.startsWith("booking:")) continue;
+		if (it.provider) continue;
 		if (pl.finalUnitAmount !== it.unitAmount) {
 			it.originalUnitAmount = it.unitAmount;
 			it.unitAmount = pl.finalUnitAmount;
@@ -194,37 +218,44 @@ async function createCheckout(ctx: RouteContext, input: CheckoutInput, user: Use
 		}
 	}
 	const subtotal = items.reduce((n, it) => n + it.unitAmount * it.quantity, 0);
-	// Restaurant fulfilment: validate the mode, table or delivery zone, compute fee / service charge / tip.
-	let fulfilment: Fulfilment | null = null;
-	let extrasTotal = 0;
-	if (fin) {
-		if (!settings.fulfilmentModes.includes(fin.mode)) throw PluginRouteError.badRequest(`${fin.mode.replace("_", "-")} orders are not available`);
-		let table: Fulfilment["table"] = null;
-		let zone: Fulfilment["zone"] = null;
-		let deliveryFee = 0;
-		if (fin.mode === "dine_in") {
-			if (!fin.tableCode) throw PluginRouteError.badRequest("Scan the QR code on your table (or enter its code)");
-			const t = await tableByCode(ctx, fin.tableCode);
-			if (!t) throw PluginRouteError.badRequest("Unknown table code");
-			table = { id: t.id, name: t.data.name };
+
+	// Checkout extensions: each named plugin validates its part of the order and may add fees / tips and vouch for pay-later.
+	const adjustments: OrderAdjustment[] = [];
+	const extensions: Record<string, unknown> = {};
+	let allowPayLater = settings.allowManualPayment;
+	let requireEmail = true;
+	for (const [pluginId, data] of Object.entries(input.extensions ?? {})) {
+		if (!/^[a-z][a-z0-9-]{1,60}$/.test(pluginId)) throw PluginRouteError.badRequest(`Unknown checkout extension: ${pluginId}`);
+		if (!ctx.plugins) throw PluginRouteError.internal("Plugin interop is not available");
+		let ext: CheckoutExtension;
+		try {
+			ext = await ctx.plugins.call<CheckoutExtension>(pluginId, "commerce/checkout", {
+				data,
+				method: input.method,
+				items: items.map((it) => ({ productId: it.productId, slug: it.slug, title: it.title, quantity: it.quantity, unitAmount: it.unitAmount, options: it.options ?? null, optionsDisplay: it.optionsDisplay ?? null, provider: it.provider ?? null })),
+				subtotal,
+				currency: settings.currency,
+				email,
+				name: input.name ?? customer?.name ?? null,
+				phone: input.phone ?? null,
+				shippingAddress: addressFor(shippingAddress) ?? null,
+				userId: user?.id ?? null,
+			});
+		} catch (err) {
+			throw PluginRouteError.badRequest(err instanceof Error ? err.message : `${pluginId} rejected the order`);
 		}
-		if (fin.mode === "delivery") {
-			const pc = fin.postcode ?? shippingAddress?.postalCode ?? "";
-			const z = matchZone(settings.deliveryZones, pc);
-			if (!z) throw PluginRouteError.badRequest("Sorry, we do not deliver to that postcode");
-			if (!shippingAddress?.line1) throw PluginRouteError.badRequest("A delivery address is required");
-			zone = { id: z.id, name: z.name, fee: minorUnits(z.fee, settings.currency) };
-			deliveryFee = zone.fee;
-			if (z.minimum > 0 && subtotal < minorUnits(z.minimum, settings.currency)) throw PluginRouteError.badRequest(`Minimum order for delivery to ${z.name} is ${formatMoney(minorUnits(z.minimum, settings.currency), settings.currency)}`);
-		}
-		const at = fin.at && fin.at !== "asap" ? new Date(fin.at) : null;
-		if (at && Number.isNaN(at.getTime())) throw PluginRouteError.badRequest("Pick a valid time");
-		if (at && at.getTime() < Date.now() - 60_000) throw PluginRouteError.badRequest("That time has passed — pick another");
-		const serviceCharge = fin.mode === "dine_in" && settings.serviceChargePct > 0 ? Math.round(subtotal * settings.serviceChargePct / 100) : 0;
-		const tip = fin.tipAmount !== undefined ? Math.max(0, Math.round(fin.tipAmount)) : fin.tipPercent ? Math.round(subtotal * Math.min(100, fin.tipPercent) / 100) : 0;
-		fulfilment = { mode: fin.mode, at: at ? at.toISOString() : null, table, zone, deliveryFee, serviceCharge, tip, payLater: method === "manual", kitchen: "new", paidVia: method === "manual" ? "unpaid" : "online" };
-		extrasTotal = deliveryFee + serviceCharge + tip;
+		for (const a of ext?.adjustments ?? []) adjustments.push({ label: String(a.label).slice(0, 80), amount: Math.round(Number(a.amount) || 0), provider: pluginId, key: a.key });
+		if (ext?.meta !== undefined) extensions[pluginId] = ext.meta;
+		if (ext?.allowPayLater) allowPayLater = true;
+		if (ext?.requireEmail === false) requireEmail = false;
 	}
+	const extrasTotal = adjustments.reduce((n, a) => n + a.amount, 0);
+
+	if (input.method === "manual" && !allowPayLater) throw PluginRouteError.badRequest("Pay-later orders are not enabled");
+	// Any online method resolves to the store's configured provider.
+	const method = input.method === "manual" ? ("manual" as const) : settings.paymentProvider;
+	if (method === "none") throw PluginRouteError.badRequest("Online payment is not configured yet");
+
 	const id = newOrderId();
 	const now = new Date();
 	const cartId = user ? userCartId(user.id) : input.cartToken ? guestCartId(input.cartToken) : null;
@@ -235,15 +266,14 @@ async function createCheckout(ctx: RouteContext, input: CheckoutInput, user: Use
 		currency: settings.currency,
 		items,
 		subtotal,
-		shipping: fulfilment?.deliveryFee ?? 0,
+		shipping: 0,
 		tax: 0,
 		discount: priced.discountTotal,
-		fulfilment,
+		adjustments,
 		coupon: priced.coupon,
 		paymentPlan: planAcc.any ? { fullAmount: planAcc.full, depositAmount: planAcc.dep, balanceDue: planAcc.bal, balanceStatus: "due" } : null,
-		bookingIds: bookingIds.length ? bookingIds : undefined,
-		total: subtotal + extrasTotal,
-		email: input.email ?? customer?.email ?? "",
+		total: Math.max(0, subtotal + extrasTotal),
+		email,
 		customerName: input.name ?? customer?.name ?? shippingAddress?.name,
 		phone: input.phone ?? shippingAddress?.phone,
 		note: input.note,
@@ -251,6 +281,8 @@ async function createCheckout(ctx: RouteContext, input: CheckoutInput, user: Use
 		billingAddress: addressFor(billingAddress),
 		userId: user?.id ?? null,
 		cartId,
+		channel: "web",
+		extensions,
 		accessToken: randomToken(),
 		createdAt: now.toISOString(),
 		updatedAt: now.toISOString(),
@@ -264,19 +296,15 @@ async function createCheckout(ctx: RouteContext, input: CheckoutInput, user: Use
 	const cancelUrl = input.cancelUrl ?? `${origin}${settings.cancelPath}`;
 	const sep = successUrl.includes("?") ? "&" : "?";
 	const receipt = () => ({ orderId: id, number: order.number, url: `${successUrl}${sep}order=${order.number}&token=${order.accessToken}` });
-	const stockItems = items.filter((it) => !it.productId.startsWith("booking:"));
-	const attachBookings = async (status: BookingRecord["status"]) => {
-		for (const bid of bookingIds) await setBookingStatus(ctx, bid, status, `order #${order.number}`, { orderId: id });
-	};
+	const stockItems = stockLines(order);
 
 	if (method === "manual") {
-		if (!order.email && !(fulfilment && fulfilment.mode === "dine_in")) throw PluginRouteError.badRequest("Email is required for pay-later orders");
+		if (!order.email && requireEmail) throw PluginRouteError.badRequest("Email is required for pay-later orders");
 		await saveOrder(ctx, id, order);
 		await reserveStock(ctx, stockItems);
-		await attachBookings("confirmed");
 		await markConverted(ctx, cartId, id);
 		if (order.coupon) await recordCouponUse(ctx, order.coupon.id, user?.id ?? order.email.toLowerCase() ?? null).catch(() => undefined);
-		if (fulfilment) await onRestaurantOrderCommitted(ctx, settings, id, order, resolved).catch((err) => console.error("[restaurant] commit hook failed:", err));
+		await emitOrderEvent(ctx, "order.created", id, order);
 		await sendOrderEmails(ctx, settings, id, order).catch((err) => console.error("[commerce] order emails failed:", err));
 		return receipt();
 	}
@@ -286,12 +314,12 @@ async function createCheckout(ctx: RouteContext, input: CheckoutInput, user: Use
 		const polarCustomerId = customer ? await ensurePolarCustomer(ctx, settings, customer).catch(() => null) : null;
 		await saveOrder(ctx, id, order);
 		await reserveStock(ctx, stockItems);
-		await attachBookings("pending_payment");
+		await emitOrderEvent(ctx, "order.created", id, order);
 		let checkout;
 		try {
 			checkout = await polar.createCheckout({
 				products: [settings.polarProductId],
-				amount: subtotal + extrasTotal,
+				amount: order.total,
 				...(polarCustomerId ? { customer_id: polarCustomerId } : { customer_email: order.email || undefined, customer_name: order.customerName || undefined }),
 				success_url: `${successUrl}${sep}session_id={CHECKOUT_ID}`,
 				allow_discount_codes: settings.allowPromotionCodes,
@@ -313,7 +341,7 @@ async function createCheckout(ctx: RouteContext, input: CheckoutInput, user: Use
 	const needsShipping = items.some((i) => i.requiresShipping);
 	await saveOrder(ctx, id, order);
 	await reserveStock(ctx, stockItems);
-	await attachBookings("pending_payment");
+	await emitOrderEvent(ctx, "order.created", id, order);
 
 	// One-click: charge a vaulted card off-session. If the bank wants authentication, fall through to Checkout.
 	const saved = customer && input.paymentMethodId ? customer.paymentMethods.find((m) => m.id === input.paymentMethodId && m.provider === "stripe") : null;
@@ -363,13 +391,7 @@ async function createCheckout(ctx: RouteContext, input: CheckoutInput, user: Use
 					product_data: { name: `${it.title}${lineSummary(it)}`.slice(0, 250), metadata: { productId: it.productId, slug: it.slug } },
 				},
 			})),
-			...(fulfilment
-				? [
-						...(fulfilment.deliveryFee ? [{ quantity: 1, price_data: { currency: settings.currency, unit_amount: fulfilment.deliveryFee, product_data: { name: `Delivery${fulfilment.zone ? ` · ${fulfilment.zone.name}` : ""}` } } }] : []),
-						...(fulfilment.serviceCharge ? [{ quantity: 1, price_data: { currency: settings.currency, unit_amount: fulfilment.serviceCharge, product_data: { name: `Service charge ${settings.serviceChargePct}%` } } }] : []),
-						...(fulfilment.tip ? [{ quantity: 1, price_data: { currency: settings.currency, unit_amount: fulfilment.tip, product_data: { name: "Tip" } } }] : []),
-					]
-				: []),
+			...adjustments.filter((a) => a.amount > 0).map((a) => ({ quantity: 1, price_data: { currency: settings.currency, unit_amount: a.amount, product_data: { name: a.label.slice(0, 250) } } })),
 		],
 		automatic_tax: settings.automaticTax ? { enabled: "true" } : undefined,
 		phone_number_collection: settings.collectPhone ? { enabled: "true" } : undefined,
@@ -384,6 +406,7 @@ async function createCheckout(ctx: RouteContext, input: CheckoutInput, user: Use
 		},
 		...(stripeCustomerId ? { "saved_payment_method_options[payment_method_save]": "enabled" } : {}),
 	};
+	if (adjustments.some((a) => a.amount < 0)) throw PluginRouteError.badRequest("Negative adjustments are only supported on pay-later orders");
 	let session;
 	try {
 		session = await stripe.createCheckoutSession(params);
@@ -398,7 +421,7 @@ async function createCheckout(ctx: RouteContext, input: CheckoutInput, user: Use
 	return { orderId: id, number: order.number, url: session.url, sessionId: session.id };
 }
 
-/** Success page: verify the session with Stripe and finalise if paid. */
+/** Success page: verify the session with the provider and finalise if paid. */
 export async function confirmHandler(ctx: RouteContext<{ session_id: string }>) {
 	const settings = await loadSettings(ctx);
 	const hit = await findBySession(ctx, ctx.input.session_id);
@@ -590,3 +613,5 @@ export async function discountPreviewHandler(ctx: RouteContext<{ items: Array<{ 
 		couponError: priced.couponError,
 	};
 }
+
+export { formatMoney };

@@ -1,0 +1,9 @@
+{
+	"slug": "premium-restaurant",
+	"name": "Restaurant",
+	"description": "Runs a restaurant on top of Commerce (orders, menu = products) and Bookings (table reservations): delivery with postcode zones, pickup and dine-in with QR table cards, opening hours and order slots, a staff app with PIN sign-in — POS with cash / card / open tabs, cash drawer with Z reports, kitchen display per station — and automatic ticket and receipt printing (browser agent or PrintNode).",
+	"license": "MIT",
+	"author": { "name": "PremiumCMS" },
+	"keywords": ["restaurant", "delivery", "pickup", "dine-in", "qr-ordering", "pos", "kitchen-display", "printing", "reservations"],
+	"homepage": "https://premium-cms.com"
+}

@@ -1,9 +1,9 @@
 {
 	"name": "premium-commerce",
-	"version": "0.8.1",
+	"version": "1.0.0",
 	"private": true,
 	"type": "module",
-	"description": "Commerce for PremiumCMS sites \u2014 products in the CMS, Stripe Checkout, orders and inventory. Sandboxed, marketplace-installable.",
+	"description": "Commerce for PremiumCMS sites \u2014 products in the CMS, Stripe/Polar checkout, orders, inventory, discounts; lets sibling plugins sell lines and extend checkout.",
 	"exports": {
 		".": "./src/index.ts",
 		"./sandbox": "./src/sandbox-entry.ts"

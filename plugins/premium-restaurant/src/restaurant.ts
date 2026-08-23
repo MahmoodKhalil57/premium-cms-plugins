@@ -1,119 +1,27 @@
 /**
- * Restaurant module: opening hours → order/reservation slots, delivery zones,
- * tables (QR ordering), kitchen tickets + display, print jobs (browser agent
- * or PrintNode), staff PIN sessions, cash-drawer shifts and reservations.
- * Everything hangs off the normal commerce order; `fulfilment` on the order
- * says how it reaches the guest.
+ * Restaurant core: opening hours → order slots, delivery zones, tables,
+ * fulfilment records, kitchen tickets, receipts + print jobs, staff PIN
+ * sessions and cash-drawer shifts.
  */
 import { ulid } from "ulidx";
+
+import { menuProducts } from "./commerce.js";
 import { formatMoney } from "./money.js";
-import { event, orders, saveOrder } from "./orders.js";
-import { staff, type StaffRecord, zoned, zonedToUtc } from "./bookings.js";
 import type { PluginContext, StorageCollection } from "./shim.js";
 import { PluginRouteError } from "./shim.js";
-import type { DeliveryZone, Fulfilment, FulfilmentMode, KitchenStatus, Order, OrderItem, Product, StoreSettings } from "./types.js";
-
-/* ---- records ------------------------------------------------------------- */
-
-export interface TableRecord {
-	name: string;
-	/** Short code printed under the QR (e.g. T12). */
-	code: string;
-	seats: number;
-	zone?: string;
-	active: boolean;
-	createdAt: string;
-	updatedAt: string;
-}
-export interface TicketItem { title: string; quantity: number; notes?: string; options?: string }
-export interface TicketRecord {
-	orderId: string;
-	orderNumber: number;
-	station: string;
-	items: TicketItem[];
-	status: "new" | "preparing" | "ready" | "served" | "cancelled";
-	mode: FulfilmentMode;
-	table?: string | null;
-	customer?: string | null;
-	dueAt?: string | null;
-	note?: string;
-	createdAt: string;
-	startedAt?: string | null;
-	readyAt?: string | null;
-	bumpedAt?: string | null;
-}
-export interface PrinterRecord {
-	name: string;
-	/** `agent` = the staff app's printer page prints through the browser; `printnode` = cloud printing. */
-	target: "agent" | "printnode";
-	printnodePrinterId?: number | null;
-	/** Which stations' tickets land here (empty = all). */
-	stations: string[];
-	/** Job kinds: kitchen (tickets) and/or receipt. */
-	kinds: Array<"kitchen" | "receipt">;
-	/** Characters per line for the plain-text layout. */
-	width: number;
-	active: boolean;
-	createdAt: string;
-	updatedAt: string;
-}
-export interface PrintJobRecord {
-	printerId: string;
-	kind: "kitchen" | "receipt";
-	orderId: string | null;
-	orderNumber: number | null;
-	title: string;
-	/** Plain text (monospace, `width` columns) — what thermal printers and the browser agent print. */
-	text: string;
-	status: "queued" | "sent" | "printed" | "failed";
-	attempts: number;
-	error?: string | null;
-	providerRef?: string | null;
-	createdAt: string;
-	printedAt?: string | null;
-}
-export interface ShiftMovement { at: string; kind: "pay_in" | "pay_out" | "sale" | "refund"; amount: number; note?: string; orderId?: string }
-export interface ShiftRecord {
-	staffId: string;
-	staffName: string;
-	status: "open" | "closed";
-	float: number;
-	cashSales: number;
-	cardSales: number;
-	movements: ShiftMovement[];
-	orderCount: number;
-	expectedCash: number;
-	countedCash?: number | null;
-	difference?: number | null;
-	openedAt: string;
-	closedAt?: string | null;
-	note?: string;
-}
-export interface ReservationRecord {
-	name: string;
-	email: string;
-	phone?: string;
-	partySize: number;
-	at: string;
-	endAt: string;
-	tableId: string | null;
-	tableName: string | null;
-	status: "confirmed" | "seated" | "completed" | "cancelled" | "no_show";
-	notes?: string;
-	accessToken: string;
-	source: "online" | "pos";
-	createdAt: string;
-	updatedAt: string;
-}
+import { zoned, zonedToUtc } from "./time.js";
+import type { CommerceItem, CommerceOrder, DeliveryZone, FulfilmentMode, FulfilmentRecord, KitchenStatus, OrderMeta, PrinterRecord, PrintJobRecord, RestaurantSettings, ShiftMovement, ShiftRecord, StaffRecord, TableRecord, TicketItem, TicketRecord } from "./types.js";
 
 export const tables = (ctx: PluginContext) => ctx.storage.tables as StorageCollection<TableRecord>;
 export const tickets = (ctx: PluginContext) => ctx.storage.tickets as StorageCollection<TicketRecord>;
 export const printers = (ctx: PluginContext) => ctx.storage.printers as StorageCollection<PrinterRecord>;
 export const printJobs = (ctx: PluginContext) => ctx.storage.printJobs as StorageCollection<PrintJobRecord>;
 export const shifts = (ctx: PluginContext) => ctx.storage.shifts as StorageCollection<ShiftRecord>;
-export const reservations = (ctx: PluginContext) => ctx.storage.reservations as StorageCollection<ReservationRecord>;
+export const staff = (ctx: PluginContext) => ctx.storage.staff as StorageCollection<StaffRecord>;
+export const fulfilments = (ctx: PluginContext) => ctx.storage.fulfilments as StorageCollection<FulfilmentRecord>;
 
-const nowIso = () => new Date().toISOString();
+export const nowIso = () => new Date().toISOString();
+export const newId = () => ulid();
 const num = (v: unknown, d = 0) => (Number.isFinite(Number(v)) && v !== "" && v !== null && v !== undefined ? Number(v) : d);
 
 /* ---- opening hours ------------------------------------------------------- */
@@ -157,8 +65,8 @@ export function windowsFor(rules: HoursRule[], dow: number): Array<{ start: numb
 	return rules.filter((r) => r.dow === dow).map((r) => ({ start: hm(r.start), end: hm(r.end) <= hm(r.start) ? 24 * 60 : hm(r.end) })).sort((a, b) => a.start - b.start);
 }
 
-export function isOpenNow(settings: StoreSettings, at = new Date()): boolean {
-	const z = zoned(at, settings.bookingTimezone);
+export function isOpenNow(settings: RestaurantSettings, at = new Date()): boolean {
+	const z = zoned(at, settings.timezone);
 	const mins = z.hh * 60 + z.mm;
 	return windowsFor(parseHours(settings.openingHours), z.dow).some((w) => mins >= w.start && mins < w.end);
 }
@@ -166,8 +74,8 @@ export function isOpenNow(settings: StoreSettings, at = new Date()): boolean {
 export interface Slot { at: string; label: string; full?: boolean }
 
 /** Order slots for a local date: every interval inside opening windows, after lead time, throttled per slot when configured. */
-export async function orderSlots(ctx: PluginContext, settings: StoreSettings, mode: FulfilmentMode, ymd: string): Promise<{ date: string; open: boolean; asap: Slot | null; slots: Slot[] }> {
-	const tz = settings.bookingTimezone;
+export async function orderSlots(ctx: PluginContext, settings: RestaurantSettings, mode: FulfilmentMode, ymd: string): Promise<{ date: string; open: boolean; asap: Slot | null; slots: Slot[] }> {
+	const tz = settings.timezone;
 	const rules = parseHours(settings.openingHours);
 	if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) throw PluginRouteError.badRequest("date must be YYYY-MM-DD");
 	const dayStart = zonedToUtc(ymd, "00:00", tz);
@@ -195,13 +103,12 @@ export async function orderSlots(ctx: PluginContext, settings: StoreSettings, mo
 
 async function slotCounts(ctx: PluginContext, dayStart: Date): Promise<Map<string, number>> {
 	const out = new Map<string, number>();
-	const recent = await orders(ctx).query({ orderBy: { createdAt: "desc" }, limit: 300 });
+	const recent = await fulfilments(ctx).query({ orderBy: { createdAt: "desc" }, limit: 300 });
 	const end = dayStart.getTime() + 36 * 3_600_000;
-	for (const { data: o } of recent.items) {
-		const at = o.fulfilment?.at;
-		if (!at || o.status === "cancelled" || o.status === "failed") continue;
-		const t = Date.parse(at);
-		if (t >= dayStart.getTime() && t < end) out.set(at, (out.get(at) ?? 0) + 1);
+	for (const { data: f } of recent.items) {
+		if (!f.at || f.kitchen === "cancelled") continue;
+		const t = Date.parse(f.at);
+		if (t >= dayStart.getTime() && t < end) out.set(f.at, (out.get(f.at) ?? 0) + 1);
 	}
 	return out;
 }
@@ -250,6 +157,10 @@ export async function tableByCode(ctx: PluginContext, code: string): Promise<{ i
 	return hit && hit.data.active ? hit : null;
 }
 
+export function publicTable(id: string, t: TableRecord) {
+	return { id, name: t.name, code: t.code, seats: t.seats, zone: t.zone ?? null, active: t.active };
+}
+
 /* ---- staff PIN sessions -------------------------------------------------- */
 
 const SESSION_TTL_MS = 14 * 3_600_000;
@@ -272,17 +183,17 @@ export async function hashPin(ctx: PluginContext, pin: string): Promise<string> 
 	return sha256Hex(`${await siteSalt(ctx)}:${pin}`);
 }
 
-export interface StaffSession { staffId: string; name: string; roles: string[]; expiresAt: string }
+export interface StaffSession { staffId: string; userId: string | null; name: string; roles: string[]; expiresAt: string }
 
 export async function staffLogin(ctx: PluginContext, pin: string): Promise<{ token: string; session: StaffSession }> {
 	const clean = pin.replace(/\D/g, "");
 	if (clean.length < 4) throw PluginRouteError.badRequest("Enter your PIN");
 	const hash = await hashPin(ctx, clean);
 	const all = await staff(ctx).query({ limit: 200 });
-	const hit = all.items.find((m) => m.data.active && (m.data as StaffRecord & { pinHash?: string }).pinHash === hash);
+	const hit = all.items.find((m) => m.data.active && m.data.pinHash === hash);
 	if (!hit) throw PluginRouteError.forbidden("Wrong PIN");
 	const token = ulid() + ulid().toLowerCase();
-	const session: StaffSession = { staffId: hit.id, name: hit.data.name, roles: (hit.data as StaffRecord & { roles?: string[] }).roles ?? ["server"], expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString() };
+	const session: StaffSession = { staffId: hit.id, userId: hit.data.userId ?? null, name: hit.data.name, roles: hit.data.roles.length ? hit.data.roles : ["server"], expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString() };
 	await ctx.kv.set(`staffsess:${await sha256Hex(token)}`, session);
 	return { token, session };
 }
@@ -310,45 +221,105 @@ export async function requireStaff(ctx: PluginContext & { request?: Request; inp
 	return session;
 }
 
+export function normalizeStaff(input: Record<string, unknown>, existing?: StaffRecord): StaffRecord {
+	const name = String(input.name ?? existing?.name ?? "").trim();
+	if (!name) throw PluginRouteError.badRequest("Name is required");
+	const now = nowIso();
+	return {
+		userId: input.userId === undefined ? (existing?.userId ?? null) : input.userId ? String(input.userId) : null,
+		name,
+		email: typeof input.email === "string" ? input.email.trim().toLowerCase() || undefined : existing?.email,
+		title: typeof input.title === "string" ? input.title : existing?.title,
+		roles: input.roles === undefined ? (existing?.roles ?? ["server"]) : (Array.isArray(input.roles) ? input.roles.map(String) : String(input.roles).split(/[,\s]+/)).map((r) => r.trim().toLowerCase()).filter(Boolean),
+		pinHash: existing?.pinHash ?? null,
+		active: input.active === undefined ? (existing?.active ?? true) : input.active === true || input.active === "true",
+		createdAt: existing?.createdAt ?? now,
+		updatedAt: now,
+	};
+}
+
+/* ---- fulfilment records --------------------------------------------------- */
+
+export function metaOf(order: CommerceOrder): OrderMeta | null {
+	const m = order.extensions?.["premium-restaurant"] as OrderMeta | undefined;
+	return m && typeof m === "object" && m.mode ? m : null;
+}
+
+/** Make (or refresh) the fulfilment record for a Commerce order that carries our meta. */
+export async function upsertFulfilment(ctx: PluginContext, id: string, order: CommerceOrder): Promise<FulfilmentRecord | null> {
+	const meta = metaOf(order);
+	if (!meta) return null;
+	const existing = await fulfilments(ctx).get(id);
+	const adj = (key: string) => (order.adjustments ?? []).filter((a) => a.provider === "premium-restaurant" && a.key === key).reduce((n, a) => n + a.amount, 0);
+	const rec: FulfilmentRecord = {
+		orderId: id,
+		orderNumber: order.number,
+		mode: meta.mode,
+		at: meta.at ?? null,
+		tableId: meta.tableId ?? null,
+		tableName: meta.table ?? null,
+		zoneId: meta.zoneId ?? null,
+		zoneName: meta.zone ?? null,
+		deliveryFee: adj("delivery"),
+		serviceCharge: adj("service"),
+		tip: adj("tip"),
+		payLater: order.status === "awaiting_payment",
+		kitchen: existing?.kitchen ?? "new",
+		orderStatus: order.status,
+		paidVia: order.status === "paid" || order.status === "fulfilled" ? (order.offline ? (order.offline.method === "cash" ? "cash" : "card_terminal") : "online") : "unpaid",
+		customerName: order.customerName ?? existing?.customerName ?? null,
+		phone: order.phone ?? null,
+		note: order.note ?? null,
+		driverId: existing?.driverId ?? null,
+		driverName: existing?.driverName ?? null,
+		staffId: meta.staffId ?? existing?.staffId ?? null,
+		staffName: meta.staffName ?? existing?.staffName ?? null,
+		shiftId: meta.shiftId ?? existing?.shiftId ?? null,
+		ticketsCreated: existing?.ticketsCreated ?? false,
+		receiptPrinted: existing?.receiptPrinted ?? false,
+		readyAt: existing?.readyAt ?? null,
+		completedAt: existing?.completedAt ?? null,
+		createdAt: existing?.createdAt ?? order.createdAt ?? nowIso(),
+		updatedAt: nowIso(),
+	};
+	if (order.status === "cancelled" && rec.kitchen !== "cancelled") rec.kitchen = "cancelled";
+	await fulfilments(ctx).put(id, rec);
+	return rec;
+}
+
+export async function saveFulfilment(ctx: PluginContext, id: string, f: FulfilmentRecord): Promise<void> {
+	f.updatedAt = nowIso();
+	await fulfilments(ctx).put(id, f);
+}
+
 /* ---- kitchen tickets ----------------------------------------------------- */
 
-function ticketItems(items: OrderItem[]): TicketItem[] {
+function ticketItems(items: CommerceItem[]): TicketItem[] {
 	return items.map((it) => ({
 		title: it.title,
 		quantity: it.quantity,
-		options: it.optionsDisplay?.map((o) => `${o.label}: ${o.value}`).join(", ") || undefined,
+		options: it.optionsDisplay?.filter((o) => o.name !== "notes").map((o) => `${o.label}: ${o.value}`).join(", ") || undefined,
+		notes: it.optionsDisplay?.find((o) => o.name === "notes")?.value || undefined,
 	}));
 }
 
 /** One ticket per kitchen station present in the order (products carry `station`; default first station). */
-export async function createTickets(ctx: PluginContext, settings: StoreSettings, id: string, order: Order, products: Map<string, Product>): Promise<Array<{ id: string; data: TicketRecord }>> {
-	const f = order.fulfilment;
-	if (!f) return [];
+export async function createTickets(ctx: PluginContext, settings: RestaurantSettings, id: string, order: CommerceOrder, f: FulfilmentRecord): Promise<Array<{ id: string; data: TicketRecord }>> {
 	const existing = await tickets(ctx).query({ where: { orderId: id }, limit: 20 });
 	if (existing.items.length) return existing.items.map((t) => ({ id: t.id, data: t.data }));
-	const byStation = new Map<string, OrderItem[]>();
+	const { products } = await menuProducts(ctx);
+	const stationOf = new Map(products.map((p) => [p.id, p.station?.trim().toLowerCase() || ""]));
+	const byStation = new Map<string, CommerceItem[]>();
 	const fallback = settings.kdsStations[0] ?? "kitchen";
 	for (const it of order.items) {
-		if (it.productId.startsWith("booking:") || it.productId.startsWith("balance:") || it.productId.startsWith("reservation:")) continue;
-		const st = products.get(it.productId)?.station?.trim().toLowerCase() || fallback;
+		if (it.provider) continue;
+		const st = stationOf.get(it.productId) || fallback;
 		byStation.set(st, [...(byStation.get(st) ?? []), it]);
 	}
 	const ids: Array<{ id: string; data: TicketRecord }> = [];
 	for (const [station, items] of byStation) {
 		const tid = ulid();
-		const rec: TicketRecord = {
-			orderId: id,
-			orderNumber: order.number,
-			station,
-			items: ticketItems(items),
-			status: "new",
-			mode: f.mode,
-			table: f.table?.name ?? null,
-			customer: order.customerName ?? null,
-			dueAt: f.at,
-			note: order.note,
-			createdAt: nowIso(),
-		};
+		const rec: TicketRecord = { orderId: id, orderNumber: order.number, station, items: ticketItems(items), status: "new", mode: f.mode, table: f.tableName ?? null, customer: order.customerName ?? null, dueAt: f.at, note: order.note, createdAt: nowIso() };
 		await tickets(ctx).put(tid, rec);
 		ids.push({ id: tid, data: rec });
 	}
@@ -359,21 +330,19 @@ const KITCHEN_FLOW: Record<TicketRecord["status"], KitchenStatus> = { new: "new"
 
 /** After a ticket changes, roll the order's kitchen status up from its tickets. */
 export async function syncOrderKitchen(ctx: PluginContext, orderId: string): Promise<void> {
-	const o = await orders(ctx).get(orderId);
-	if (!o?.fulfilment) return;
+	const f = await fulfilments(ctx).get(orderId);
+	if (!f) return;
 	const ts = (await tickets(ctx).query({ where: { orderId }, limit: 20 })).items.map((t) => t.data).filter((t) => t.status !== "cancelled");
 	if (!ts.length) return;
 	const rank = (s: TicketRecord["status"]) => ["new", "preparing", "ready", "served"].indexOf(s);
 	const lowest = ts.reduce((m, t) => Math.min(m, rank(t.status)), 3);
 	const next = KITCHEN_FLOW[(["new", "preparing", "ready", "served"] as const)[lowest]!];
-	if (["out_for_delivery", "delivered", "completed", "cancelled"].includes(o.fulfilment.kitchen)) return;
-	if (o.fulfilment.kitchen !== next) {
-		o.fulfilment.kitchen = next;
-		if (next === "ready") o.fulfilment.readyAt = nowIso();
-		if (next === "served") o.fulfilment.completedAt = nowIso();
-		o.events.push(event("kitchen", next));
-		o.updatedAt = nowIso();
-		await saveOrder(ctx, orderId, o);
+	if (["out_for_delivery", "delivered", "completed", "cancelled"].includes(f.kitchen)) return;
+	if (f.kitchen !== next) {
+		f.kitchen = next;
+		if (next === "ready") f.readyAt = nowIso();
+		if (next === "served") f.completedAt = nowIso();
+		await saveFulfilment(ctx, orderId, f);
 	}
 }
 
@@ -383,10 +352,7 @@ const pad = (l: string, r: string, w: number) => {
 	const space = Math.max(1, w - l.length - r.length);
 	return l.length + r.length >= w ? `${l}\n${" ".repeat(Math.max(0, w - r.length))}${r}` : `${l}${" ".repeat(space)}${r}`;
 };
-const center = (s: string, w: number) => {
-	const left = Math.max(0, Math.floor((w - s.length) / 2));
-	return " ".repeat(left) + s;
-};
+const center = (s: string, w: number) => " ".repeat(Math.max(0, Math.floor((w - s.length) / 2))) + s;
 const wrap = (s: string, w: number): string[] => {
 	const words = s.split(/\s+/);
 	const lines: string[] = [];
@@ -401,12 +367,6 @@ const wrap = (s: string, w: number): string[] => {
 	return lines;
 };
 
-function fulfilmentLines(f: Fulfilment, tz: string, w: number): string[] {
-	const when = f.at ? formatLocal(f.at, tz) : "ASAP";
-	const mode = f.mode === "dine_in" ? `DINE-IN${f.table ? ` · ${f.table.name}` : ""}` : f.mode === "delivery" ? "DELIVERY" : f.mode === "pickup" ? "PICKUP" : "POS";
-	return [center(`** ${mode} **`, w), center(when, w)];
-}
-
 export function formatLocal(iso: string, tz: string): string {
 	try {
 		return new Intl.DateTimeFormat("en-GB", { timeZone: tz, weekday: "short", hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" }).format(new Date(iso));
@@ -415,52 +375,55 @@ export function formatLocal(iso: string, tz: string): string {
 	}
 }
 
-export function kitchenTicketText(t: TicketRecord, order: Order, settings: StoreSettings, width = 32): string {
+function fulfilmentLines(f: FulfilmentRecord, tz: string, w: number): string[] {
+	const when = f.at ? formatLocal(f.at, tz) : "ASAP";
+	const mode = f.mode === "dine_in" ? `DINE-IN${f.tableName ? ` · ${f.tableName}` : ""}` : f.mode === "delivery" ? "DELIVERY" : f.mode === "pickup" ? "PICKUP" : "POS";
+	return [center(`** ${mode} **`, w), center(when, w)];
+}
+
+export function kitchenTicketText(t: TicketRecord, f: FulfilmentRecord, settings: RestaurantSettings, width = 32): string {
 	const w = width;
 	const lines = [
 		center(`#${t.orderNumber} · ${t.station.toUpperCase()}`, w),
-		...fulfilmentLines(order.fulfilment!, settings.bookingTimezone, w),
+		...fulfilmentLines(f, settings.timezone, w),
 		"-".repeat(w),
 		...t.items.flatMap((it) => [`${it.quantity} x ${it.title}`.slice(0, w), ...(it.options ? wrap(`   ${it.options}`, w) : []), ...(it.notes ? wrap(`   ! ${it.notes}`, w) : [])]),
 		"-".repeat(w),
-		...(order.note ? ["NOTE:", ...wrap(order.note, w)] : []),
-		order.customerName ? `Guest: ${order.customerName}`.slice(0, w) : "",
-		formatLocal(t.createdAt, settings.bookingTimezone),
+		...(t.note ? ["NOTE:", ...wrap(t.note, w)] : []),
+		t.customer ? `Guest: ${t.customer}`.slice(0, w) : "",
+		formatLocal(t.createdAt, settings.timezone),
 	];
 	return lines.join("\n") + "\n\n\n";
 }
 
-export function receiptText(order: Order, settings: StoreSettings, width = 32): string {
+export function receiptText(order: CommerceOrder, f: FulfilmentRecord | null, settings: RestaurantSettings, width = 32): string {
 	const w = width;
 	const money = (n: number) => formatMoney(n, order.currency);
-	const f = order.fulfilment;
 	const lines: string[] = [
 		center(settings.storeName || "Receipt", w),
 		...(settings.receiptHeader ? settings.receiptHeader.split("\n").map((l) => center(l.trim(), w)) : []),
 		"",
-		pad(`Order #${order.number}`, formatLocal(order.createdAt, settings.bookingTimezone), w),
-		...(f ? fulfilmentLines(f, settings.bookingTimezone, w) : []),
+		pad(`Order #${order.number}`, formatLocal(order.createdAt, settings.timezone), w),
+		...(f ? fulfilmentLines(f, settings.timezone, w) : []),
 		order.customerName ? `Guest: ${order.customerName}`.slice(0, w) : "",
 		"-".repeat(w),
 		...order.items.flatMap((it) => [pad(`${it.quantity} x ${it.title}`.slice(0, w - 9), money(it.unitAmount * it.quantity), w), ...(it.optionsDisplay?.length ? wrap(`   ${it.optionsDisplay.map((o) => o.value).join(", ")}`, w) : [])]),
 		"-".repeat(w),
 		pad("Subtotal", money(order.subtotal), w),
 		...(order.discount ? [pad("Discount", `-${money(order.discount)}`, w)] : []),
-		...(f?.deliveryFee ? [pad("Delivery", money(f.deliveryFee), w)] : []),
-		...(f?.serviceCharge ? [pad(`Service ${settings.serviceChargePct}%`, money(f.serviceCharge), w)] : []),
-		...(f?.tip ? [pad("Tip", money(f.tip), w)] : []),
+		...(order.adjustments ?? []).filter((a) => a.amount).map((a) => pad(a.label.slice(0, w - 10), money(a.amount), w)),
 		...(order.tax ? [pad("Tax", money(order.tax), w)] : []),
 		pad("TOTAL", money(order.total), w),
-		...(f?.paidVia === "cash" && f.tendered !== undefined ? [pad("Cash", money(f.tendered), w), pad("Change", money(f.change ?? 0), w)] : []),
-		pad("Paid", f?.paidVia === "unpaid" || order.status === "awaiting_payment" ? "NOT YET" : f?.paidVia === "cash" ? "cash" : f?.paidVia === "card_terminal" ? "card" : order.paymentMethod === "manual" ? "pay later" : "online", w),
+		...(order.offline?.method === "cash" && order.offline.tendered !== undefined ? [pad("Cash", money(order.offline.tendered), w), pad("Change", money(order.offline.change ?? 0), w)] : []),
+		pad("Paid", order.status === "awaiting_payment" || order.status === "pending" ? "NOT YET" : order.offline ? order.offline.method.replace("_", " ") : "online", w),
 		"",
 		...(settings.receiptFooter ? wrap(settings.receiptFooter, w).map((l) => center(l, w)) : []),
 	];
 	return lines.filter((l, i, a) => !(l === "" && a[i - 1] === "")).join("\n") + "\n\n\n";
 }
 
-/** Queue kitchen tickets and a receipt on every matching active printer; PrintNode jobs are pushed immediately. */
-export async function queuePrintJobs(ctx: PluginContext, settings: StoreSettings, id: string, order: Order, ts: Array<{ id: string; data: TicketRecord | null }>, kinds: Array<"kitchen" | "receipt"> = ["kitchen", "receipt"]): Promise<number> {
+/** Queue kitchen tickets and/or a receipt on every matching active printer; PrintNode jobs are pushed immediately. */
+export async function queuePrintJobs(ctx: PluginContext, settings: RestaurantSettings, id: string, order: CommerceOrder, f: FulfilmentRecord, ts: Array<{ id: string; data: TicketRecord | null }>, kinds: Array<"kitchen" | "receipt"> = ["kitchen", "receipt"]): Promise<number> {
 	const active = (await printers(ctx).query({ where: { active: true }, limit: 50 })).items;
 	if (!active.length) return 0;
 	let n = 0;
@@ -469,19 +432,19 @@ export async function queuePrintJobs(ctx: PluginContext, settings: StoreSettings
 			for (const t of ts) {
 				if (!t.data) continue;
 				if (p.stations.length && !p.stations.includes(t.data.station)) continue;
-				await enqueue(ctx, settings, pid, p, { kind: "kitchen", orderId: id, orderNumber: order.number, title: `#${order.number} ${t.data.station}`, text: kitchenTicketText(t.data, order, settings, p.width) });
+				await enqueue(ctx, settings, pid, p, { kind: "kitchen", orderId: id, orderNumber: order.number, title: `#${order.number} ${t.data.station}`, text: kitchenTicketText(t.data, f, settings, p.width) });
 				n++;
 			}
 		}
 		if (kinds.includes("receipt") && p.kinds.includes("receipt")) {
-			await enqueue(ctx, settings, pid, p, { kind: "receipt", orderId: id, orderNumber: order.number, title: `#${order.number} receipt`, text: receiptText(order, settings, p.width) });
+			await enqueue(ctx, settings, pid, p, { kind: "receipt", orderId: id, orderNumber: order.number, title: `#${order.number} receipt`, text: receiptText(order, f, settings, p.width) });
 			n++;
 		}
 	}
 	return n;
 }
 
-async function enqueue(ctx: PluginContext, settings: StoreSettings, printerId: string, printer: PrinterRecord, job: Pick<PrintJobRecord, "kind" | "orderId" | "orderNumber" | "title" | "text">): Promise<string> {
+async function enqueue(ctx: PluginContext, settings: RestaurantSettings, printerId: string, printer: PrinterRecord, job: Pick<PrintJobRecord, "kind" | "orderId" | "orderNumber" | "title" | "text">): Promise<string> {
 	const id = ulid();
 	const rec: PrintJobRecord = { printerId, ...job, status: "queued", attempts: 0, createdAt: nowIso() };
 	await printJobs(ctx).put(id, rec);
@@ -490,7 +453,7 @@ async function enqueue(ctx: PluginContext, settings: StoreSettings, printerId: s
 }
 
 /** PrintNode raw job: plain text + ESC/POS cut, base64. */
-export async function sendToPrintNode(ctx: PluginContext, settings: StoreSettings, id: string, job: PrintJobRecord, printer: PrinterRecord): Promise<void> {
+export async function sendToPrintNode(ctx: PluginContext, settings: RestaurantSettings, id: string, job: PrintJobRecord, printer: PrinterRecord): Promise<void> {
 	if (!ctx.http) return;
 	const content = btoa(unescape(encodeURIComponent(`${job.text}\n\n\n\x1dV\x00`)));
 	const res = await ctx.http.fetch("https://api.printnode.com/printjobs", {
@@ -510,13 +473,14 @@ export async function sendToPrintNode(ctx: PluginContext, settings: StoreSetting
 	await printJobs(ctx).put(id, job);
 }
 
-/* ---- order placed / paid hooks -------------------------------------------- */
-
-/** Called once an order is committed (paid online, pay-later placed, or rung up at the POS): tickets + prints. */
-export async function onRestaurantOrderCommitted(ctx: PluginContext, settings: StoreSettings, id: string, order: Order, products: Map<string, Product>): Promise<void> {
-	if (!order.fulfilment) return;
-	const created = await createTickets(ctx, settings, id, order, products);
-	await queuePrintJobs(ctx, settings, id, order, created).catch((err) => console.error("[restaurant] print queue failed:", err));
+/** Once an order is committed (paid online, pay-later placed, or rung up at the POS): tickets + prints, exactly once. */
+export async function onOrderCommitted(ctx: PluginContext, settings: RestaurantSettings, id: string, order: CommerceOrder, f: FulfilmentRecord): Promise<void> {
+	if (f.ticketsCreated) return;
+	const created = await createTickets(ctx, settings, id, order, f);
+	await queuePrintJobs(ctx, settings, id, order, f, created, order.status === "paid" ? ["kitchen", "receipt"] : ["kitchen"]).catch((err) => console.error("[restaurant] print queue failed:", err));
+	f.ticketsCreated = true;
+	f.receiptPrinted = order.status === "paid";
+	await saveFulfilment(ctx, id, f);
 }
 
 /* ---- cash drawer shifts --------------------------------------------------- */
@@ -549,6 +513,14 @@ export async function recordShiftMovement(ctx: PluginContext, kind: ShiftMovemen
 	await shifts(ctx).put(cur.id, cur.shift);
 }
 
+export async function recordCardSale(ctx: PluginContext, amount: number): Promise<void> {
+	const cur = await currentShift(ctx);
+	if (!cur) return;
+	cur.shift.cardSales += amount;
+	cur.shift.orderCount++;
+	await shifts(ctx).put(cur.id, cur.shift);
+}
+
 export async function closeShift(ctx: PluginContext, counted: number, note?: string): Promise<{ id: string; shift: ShiftRecord }> {
 	const cur = await currentShift(ctx);
 	if (!cur) throw PluginRouteError.badRequest("No drawer is open");
@@ -561,89 +533,9 @@ export async function closeShift(ctx: PluginContext, counted: number, note?: str
 	return cur;
 }
 
-/* ---- reservations --------------------------------------------------------- */
-
-/** Times a party can be seated: opening windows minus turn time, against tables with enough seats that are free. */
-export async function reservationAvailability(ctx: PluginContext, settings: StoreSettings, ymd: string, party: number): Promise<{ date: string; slots: Array<{ at: string; label: string; tableId: string }> }> {
-	const tz = settings.bookingTimezone;
-	if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) throw PluginRouteError.badRequest("date must be YYYY-MM-DD");
-	if (party < 1 || party > settings.maxPartySize) throw PluginRouteError.badRequest(`Parties of ${settings.maxPartySize} or fewer can book online`);
-	const dayStart = zonedToUtc(ymd, "00:00", tz);
-	const dow = zoned(new Date(dayStart.getTime() + 12 * 3_600_000), tz).dow;
-	const windows = windowsFor(parseHours(settings.openingHours), dow);
-	const turn = Math.max(30, settings.turnTimeMin) * 60_000;
-	const earliest = Date.now() + settings.reservationLeadMin * 60_000;
-	const all = (await tables(ctx).query({ limit: 200 })).items.filter((t) => t.data.active && t.data.seats >= party).sort((a, b) => a.data.seats - b.data.seats);
-	const dayEnd = dayStart.getTime() + 36 * 3_600_000;
-	const booked = (await reservations(ctx).query({ orderBy: { at: "asc" }, limit: 500 })).items.filter((r) => r.data.status !== "cancelled" && r.data.status !== "no_show" && Date.parse(r.data.at) < dayEnd && Date.parse(r.data.endAt) > dayStart.getTime());
-	const slots: Array<{ at: string; label: string; tableId: string }> = [];
-	const step = 30 * 60_000;
-	for (const w of windows) {
-		for (let t = dayStart.getTime() + w.start * 60_000; t + turn <= dayStart.getTime() + w.end * 60_000; t += step) {
-			if (t < earliest) continue;
-			const end = t + turn;
-			const table = all.find((tb) => !booked.some((r) => r.data.tableId === tb.id && Date.parse(r.data.at) < end && Date.parse(r.data.endAt) > t));
-			if (!table) continue;
-			const z = zoned(new Date(t), tz);
-			slots.push({ at: new Date(t).toISOString(), label: `${String(z.hh).padStart(2, "0")}:${String(z.mm).padStart(2, "0")}`, tableId: table.id });
-		}
-	}
-	return { date: ymd, slots };
-}
-
-export async function createReservation(ctx: PluginContext, settings: StoreSettings, input: { name: string; email: string; phone?: string; partySize: number; at: string; notes?: string; source?: "online" | "pos" }): Promise<{ id: string; reservation: ReservationRecord }> {
-	const at = new Date(input.at);
-	if (Number.isNaN(at.getTime())) throw PluginRouteError.badRequest("Pick a time");
-	const ymd = zoned(at, settings.bookingTimezone).ymd;
-	const avail = await reservationAvailability(ctx, settings, ymd, input.partySize);
-	const slot = avail.slots.find((s) => s.at === at.toISOString());
-	if (!slot) throw PluginRouteError.conflict("That time is no longer available — please pick another");
-	const table = await tables(ctx).get(slot.tableId);
-	const id = ulid();
-	const rec: ReservationRecord = {
-		name: input.name.trim(),
-		email: input.email.trim().toLowerCase(),
-		phone: input.phone?.trim() || undefined,
-		partySize: input.partySize,
-		at: at.toISOString(),
-		endAt: new Date(at.getTime() + Math.max(30, settings.turnTimeMin) * 60_000).toISOString(),
-		tableId: slot.tableId,
-		tableName: table?.name ?? null,
-		status: "confirmed",
-		notes: input.notes?.trim() || undefined,
-		accessToken: ulid().toLowerCase() + ulid().toLowerCase(),
-		source: input.source ?? "online",
-		createdAt: nowIso(),
-		updatedAt: nowIso(),
-	};
-	await reservations(ctx).put(id, rec);
-	if (ctx.email && rec.email) {
-		const when = formatLocal(rec.at, settings.bookingTimezone);
-		await ctx.email.send({ to: rec.email, subject: `Table for ${rec.partySize} at ${settings.storeName || "the restaurant"} — ${when}`, text: `Hi ${rec.name.split(" ")[0]},\n\nYour table for ${rec.partySize} is booked for ${when}.\n\nNeed to change it? Reply to this email or cancel here: ${siteUrlOf(ctx)}/reserve?reservation=${id}&token=${rec.accessToken}\n\nSee you soon!` }).catch(() => undefined);
-		if (settings.notifyEmail) await ctx.email.send({ to: settings.notifyEmail, subject: `[reservation] ${rec.name} · ${rec.partySize} · ${when}`, text: `${rec.name} (${rec.email}${rec.phone ? `, ${rec.phone}` : ""}) booked ${rec.tableName ?? "a table"} for ${rec.partySize} at ${when}.${rec.notes ? `\n\nNotes: ${rec.notes}` : ""}` }).catch(() => undefined);
-	}
-	return { id, reservation: rec };
-}
-
-export function publicReservation(id: string, r: ReservationRecord, settings: StoreSettings) {
-	return { id, name: r.name, email: r.email, partySize: r.partySize, at: r.at, when: formatLocal(r.at, settings.bookingTimezone), table: r.tableName, status: r.status, notes: r.notes ?? null };
-}
-
-function siteUrlOf(ctx: PluginContext): string {
-	try {
-		return new URL((ctx as { request?: Request }).request?.url ?? "").origin;
-	} catch {
-		return "";
-	}
-}
-
 /* ---- public shapes --------------------------------------------------------- */
 
-export function publicFulfilment(f: Fulfilment | null | undefined, tz: string) {
+export function publicFulfilment(f: FulfilmentRecord | null | undefined, tz: string) {
 	if (!f) return null;
-	return { mode: f.mode, at: f.at, when: f.at ? formatLocal(f.at, tz) : "ASAP", table: f.table?.name ?? null, zone: f.zone?.name ?? null, deliveryFee: f.deliveryFee, serviceCharge: f.serviceCharge, tip: f.tip, payLater: f.payLater, kitchen: f.kitchen, paidVia: f.paidVia ?? null, driverName: f.driverName ?? null, readyAt: f.readyAt ?? null };
-}
-
-export function publicTable(id: string, t: TableRecord) {
-	return { id, name: t.name, code: t.code, seats: t.seats, zone: t.zone ?? null, active: t.active };
+	return { mode: f.mode, at: f.at, when: f.at ? formatLocal(f.at, tz) : "ASAP", table: f.tableName ?? null, zone: f.zoneName ?? null, deliveryFee: f.deliveryFee, serviceCharge: f.serviceCharge, tip: f.tip, payLater: f.payLater, kitchen: f.kitchen, paidVia: f.paidVia ?? null, driverName: f.driverName ?? null, readyAt: f.readyAt ?? null };
 }
