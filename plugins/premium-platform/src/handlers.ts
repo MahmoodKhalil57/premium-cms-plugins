@@ -632,3 +632,24 @@ export async function meProjectStep(ctx: RouteContext<{ id: string; step: "deplo
 			throw PluginRouteError.badRequest("unknown step");
 	}
 }
+
+/**
+ * One live project's plugin setup as theme-seed `plugins` fragments — what the
+ * themes repo's bin/snapshot-theme.sh merges into a theme's seed.json. Calls
+ * the child's /platform/config-export (provision secret), which invokes each
+ * plugin's config/export route in-process as a system user. Auth: DEPLOY_KEY.
+ */
+export async function fleetExport(ctx: RouteContext<{ key?: string; project?: string; plugins?: string[] }>) {
+	const env = await loadEnv(ctx);
+	if (!env.DEPLOY_KEY || ctx.input.key !== env.DEPLOY_KEY) throw PluginRouteError.forbidden("unauthorized");
+	const id = String(ctx.input.project ?? "").trim();
+	if (!id) throw PluginRouteError.badRequest("project is required");
+	const p = (await listProjects(ctx)).find((x) => x.id === id);
+	if (!p?.provision_secret) throw PluginRouteError.notFound("Unknown project (or not provisioned)");
+	const plugins = (ctx.input.plugins ?? []).filter((x) => typeof x === "string" && /^[a-z0-9-]+$/.test(x));
+	if (!plugins.length) throw PluginRouteError.badRequest("plugins[] is required");
+	const res = await http(ctx, `https://${p.hostname}/platform/config-export`, { method: "POST", headers: { "x-provision-secret": p.provision_secret, "Content-Type": "application/json" }, body: JSON.stringify({ plugins }) });
+	const parsed = JSON.parse(res.text || "{}") as { error?: string; plugins?: Record<string, unknown> };
+	if (!res.ok) throw new Error(parsed.error ?? `HTTP ${res.status}`);
+	return { id: p.id, hostname: p.hostname, plugins: parsed.plugins ?? {} };
+}

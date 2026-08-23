@@ -3,7 +3,7 @@
  * Capabilities, storage and admin metadata live in manifest.json.
  */
 
-import { adminHandler, automationDeleteHandler, automationRunHandler, automationSaveHandler, automationsListHandler, bookingCreateHandler, bookingsListHandler, bookingsTick, bookingUpdateHandler, resourceDeleteHandler, resourceSaveHandler, resourcesListHandler, serviceDeleteHandler, serviceSaveHandler, servicesListHandler, statsHandler, usersListHandler } from "./handlers/admin.js";
+import { adminHandler, automationDeleteHandler, automationRunHandler, automationSaveHandler, automationsListHandler, bookingCreateHandler, bookingsListHandler, bookingsTick, bookingUpdateHandler, configExportHandler, resourceDeleteHandler, resourceSaveHandler, resourcesListHandler, serviceDeleteHandler, serviceSaveHandler, servicesListHandler, statsHandler, usersListHandler } from "./handlers/admin.js";
 import { bookingsQueryHandler, commerceLineHandler, internalConfigHandler, onCommerceEvent, resourcesSyncHandler, resourcesUnsyncHandler, servicesSyncHandler } from "./handlers/internal.js";
 import { accountBookingsHandler, availabilityHandler, availableDaysHandler, bookingCancelHandler, bookingLookupHandler, configHandler, holdHandler, servicesHandler } from "./handlers/public.js";
 import { migrateFromCommerceHandler } from "./handlers/migrate.js";
@@ -78,6 +78,7 @@ export default definePlugin({
 		"automations/delete": { handler: validated(recordDelete, automationDeleteHandler as never) },
 		"automations/run": { handler: validated(v.object({ id: v.string({ max: 64 }).optional(), dryRun: v.boolean().default(false) }), automationRunHandler as never) },
 		"migrate/commerce": { handler: route(migrateFromCommerceHandler as never) },
+		"config/export": { handler: route(configExportHandler as never) },
 		// Sibling plugins
 		"commerce/line": { handler: validated(v.object({ ref: id, quantity: v.number().optional(), email: v.string().optional(), userId: v.string().nullable().optional() }), commerceLineHandler as never) },
 		"resources/sync": { handler: validated(v.object({ externalId: v.string({ min: 1, max: 160 }), record: v.record(v.unknown()) }), resourcesSyncHandler as never) },

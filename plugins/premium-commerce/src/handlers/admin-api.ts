@@ -316,3 +316,30 @@ export async function collectBalanceHandler(ctx: RouteContext<{ id: string; mode
 	}
 	return { order, status: "link_sent", balanceOrderId: id, url: session.url };
 }
+
+/* ---- config export (theme snapshots) ---------------------------------------- */
+
+const EXPORT_SETTING_KEYS = ["currency", "paymentProvider", "allowManualPayment", "customerAccounts", "storeName", "automaticTax", "shippingRates", "shippingCountries", "allowPromotionCodes", "collectPhone", "successPath", "cancelPath"];
+
+/**
+ * The plugin's current setup as a theme-seed `plugins.<id>` fragment:
+ * non-secret settings and discounts. Payment provider keys and webhook
+ * secrets, the notify email, and all order/cart/inventory runtime data are
+ * left out — a fresh site configures its own provider.
+ */
+export async function configExportHandler(ctx: RouteContext) {
+	const rows = (await ctx.kv.list("settings:").catch(() => null)) ?? [];
+	const bag: Record<string, unknown> = Object.fromEntries(rows.map((r) => [r.key.replace(/^settings:/, ""), r.value]));
+	const settings: Record<string, unknown> = {};
+	for (const k of EXPORT_SETTING_KEYS) {
+		const v = bag[k];
+		if (v !== undefined && v !== null && v !== "") settings[k] = v;
+	}
+	const calls: Array<{ route: string; body?: unknown; ignoreErrors?: boolean }> = [];
+	for (const d of (await discounts(ctx).query({ limit: 200 })).items.sort((a, b) => String(a.data.code ?? a.data.title ?? "").localeCompare(String(b.data.code ?? b.data.title ?? "")))) {
+		const rec = { ...(d.data as unknown as Record<string, unknown>) };
+		for (const k of ["createdAt", "updatedAt", "usedCount", "timesUsed"]) delete rec[k];
+		calls.push({ route: "discounts/save", body: { discount: rec } });
+	}
+	return { settings, calls };
+}

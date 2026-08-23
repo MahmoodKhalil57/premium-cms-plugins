@@ -1,6 +1,6 @@
 {
 	"id": "premium-commerce",
-	"version": "1.0.2",
+	"version": "1.0.3",
 	"capabilities": [
 		"content:read",
 		"email:send",
@@ -378,6 +378,10 @@
 				"premium-bookings",
 				"premium-restaurant"
 			]
+		},
+		{
+			"name": "config/export",
+			"permission": "premium-commerce:orders:manage"
 		}
 	],
 	"admin": {
@@ -434,7 +438,7 @@
 			"stripeSecretKey": {
 				"type": "secret",
 				"label": "Stripe secret key",
-				"description": "sk_live_\u2026 or sk_test_\u2026. Checkout, refunds and payment verification use it; it never leaves the server.",
+				"description": "sk_live_… or sk_test_…. Checkout, refunds and payment verification use it; it never leaves the server.",
 				"showWhen": {
 					"field": "paymentProvider",
 					"equals": "stripe"
@@ -443,7 +447,7 @@
 			"stripeWebhookSecret": {
 				"type": "secret",
 				"label": "Stripe webhook signing secret",
-				"description": "whsec_\u2026 of the webhook endpoint you create at dashboard.stripe.com/webhooks for the URL below (events: checkout.session.completed, checkout.session.async_payment_succeeded, checkout.session.async_payment_failed, checkout.session.expired).",
+				"description": "whsec_… of the webhook endpoint you create at dashboard.stripe.com/webhooks for the URL below (events: checkout.session.completed, checkout.session.async_payment_succeeded, checkout.session.async_payment_failed, checkout.session.expired).",
 				"showWhen": {
 					"field": "paymentProvider",
 					"equals": "stripe"
@@ -452,7 +456,7 @@
 			"stripeWebhookUrl": {
 				"type": "info",
 				"label": "Stripe webhook URL",
-				"description": "Add this endpoint in Stripe \u2192 Developers \u2192 Webhooks.",
+				"description": "Add this endpoint in Stripe → Developers → Webhooks.",
 				"value": "{{origin}}/commerce-webhook/stripe",
 				"showWhen": {
 					"field": "paymentProvider",
@@ -470,7 +474,7 @@
 			"shippingRates": {
 				"type": "string",
 				"label": "Stripe shipping rate ids",
-				"description": "Comma-separated shr_\u2026 ids offered at checkout for physical products.",
+				"description": "Comma-separated shr_… ids offered at checkout for physical products.",
 				"showWhen": {
 					"field": "paymentProvider",
 					"equals": "stripe"
@@ -479,7 +483,7 @@
 			"polarAccessToken": {
 				"type": "secret",
 				"label": "Polar organization access token",
-				"description": "polar_oat_\u2026 with checkouts:read, checkouts:write, orders:read and refunds:write scopes.",
+				"description": "polar_oat_… with checkouts:read, checkouts:write, orders:read and refunds:write scopes.",
 				"showWhen": {
 					"field": "paymentProvider",
 					"equals": "polar"
@@ -497,7 +501,7 @@
 			"polarWebhookSecret": {
 				"type": "secret",
 				"label": "Polar webhook secret",
-				"description": "Secret of the webhook endpoint you create in Polar \u2192 Settings \u2192 Webhooks for the URL below (events: checkout.updated, order.created).",
+				"description": "Secret of the webhook endpoint you create in Polar → Settings → Webhooks for the URL below (events: checkout.updated, order.created).",
 				"showWhen": {
 					"field": "paymentProvider",
 					"equals": "polar"
@@ -506,7 +510,7 @@
 			"polarWebhookUrl": {
 				"type": "info",
 				"label": "Polar webhook URL",
-				"description": "Add this endpoint in Polar \u2192 Settings \u2192 Webhooks.",
+				"description": "Add this endpoint in Polar → Settings → Webhooks.",
 				"value": "{{origin}}/commerce-webhook/polar",
 				"showWhen": {
 					"field": "paymentProvider",
@@ -521,7 +525,7 @@
 			"customerAccounts": {
 				"type": "boolean",
 				"label": "Customer accounts",
-				"description": "Shoppers can sign in with an email link to save addresses, reuse saved cards (vaulted by Stripe/Polar \u2014 never stored here) and see their orders."
+				"description": "Shoppers can sign in with an email link to save addresses, reuse saved cards (vaulted by Stripe/Polar — never stored here) and see their orders."
 			},
 			"notifyEmail": {
 				"type": "string",

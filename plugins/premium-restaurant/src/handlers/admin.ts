@@ -210,3 +210,39 @@ export async function adminHandler(ctx: RouteContext<{ page?: string }>) {
 		],
 	};
 }
+
+/* ---- config export (theme snapshots) ---------------------------------------- */
+
+const EXPORT_SETTING_KEYS = ["timezone", "storeName", "fulfilmentModes", "openingHours", "prepTimeMin", "deliveryZones", "pickupLeadMin", "orderSlotIntervalMin", "maxOrdersPerSlot", "tipPresets", "serviceChargePct", "allowPayAtTable", "allowPayOnCollection", "qrOrdering", "kdsStations", "receiptHeader", "receiptFooter", "reservationsEnabled", "turnTimeMin", "maxPartySize", "reservationLeadMin", "trackPath", "orderPath"];
+
+/**
+ * The plugin's current setup as a theme-seed `plugins.<id>` fragment: tables,
+ * printers and staff (idempotent saves) plus non-secret settings. Left out on
+ * purpose: staff PINs and linked users, the PrintNode API key and printer ids,
+ * the notify email, shifts and all order/ticket runtime data.
+ */
+export async function configExportHandler(ctx: RouteContext) {
+	const rows = (await ctx.kv.list("settings:").catch(() => null)) ?? [];
+	const bag: Record<string, unknown> = Object.fromEntries(rows.map((r) => [r.key.replace(/^settings:/, ""), r.value]));
+	const settings: Record<string, unknown> = {};
+	for (const k of EXPORT_SETTING_KEYS) {
+		const v = bag[k];
+		if (v !== undefined && v !== null && v !== "") settings[k] = v;
+	}
+	const calls: Array<{ route: string; body?: unknown; ignoreErrors?: boolean }> = [];
+	const strip = (data: unknown, drop: string[]): Record<string, unknown> => {
+		const d = { ...(data as Record<string, unknown>) };
+		for (const k of drop) delete d[k];
+		return d;
+	};
+	for (const t of (await tables(ctx).query({ limit: 200 })).items.sort((a, b) => a.data.name.localeCompare(b.data.name, undefined, { numeric: true }))) {
+		calls.push({ route: "tables/save", body: { record: strip(t.data, ["createdAt", "updatedAt"]) } });
+	}
+	for (const p of (await printers(ctx).query({ limit: 50 })).items.sort((a, b) => a.data.name.localeCompare(b.data.name))) {
+		calls.push({ route: "printers/save", body: { record: strip(p.data, ["printnodePrinterId", "createdAt", "updatedAt"]) } });
+	}
+	for (const m of (await staff(ctx).query({ limit: 200 })).items.sort((a, b) => a.data.name.localeCompare(b.data.name))) {
+		calls.push({ route: "staff/save", body: { record: strip(m.data, ["pinHash", "userId", "createdAt", "updatedAt"]) } });
+	}
+	return { settings, calls };
+}

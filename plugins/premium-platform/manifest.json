@@ -1,6 +1,6 @@
 {
 	"id": "premium-platform",
-	"version": "1.13.0",
+	"version": "1.14.0",
 	"capabilities": [
 		"network:request:unrestricted",
 		"users:read"
@@ -191,6 +191,10 @@
 		{
 			"name": "me/projects/step",
 			"session": true
+		},
+		{
+			"name": "fleet/export",
+			"public": true
 		}
 	],
 	"admin": {
@@ -250,7 +254,7 @@
 			"STRIPE_SECRET_KEY": {
 				"type": "secret",
 				"label": "Stripe secret key",
-				"description": "sk_live_\u2026 / sk_test_\u2026 (Checkout + Customers).",
+				"description": "sk_live_… / sk_test_… (Checkout + Customers).",
 				"showWhen": {
 					"field": "PAYMENT_PROVIDER",
 					"equals": "stripe"
@@ -259,7 +263,7 @@
 			"STRIPE_WEBHOOK_SECRET": {
 				"type": "secret",
 				"label": "Stripe webhook signing secret",
-				"description": "whsec_\u2026 from the webhook endpoint you create at dashboard.stripe.com/webhooks for the URL below (event: checkout.session.completed).",
+				"description": "whsec_… from the webhook endpoint you create at dashboard.stripe.com/webhooks for the URL below (event: checkout.session.completed).",
 				"showWhen": {
 					"field": "PAYMENT_PROVIDER",
 					"equals": "stripe"
@@ -268,7 +272,7 @@
 			"STRIPE_WEBHOOK_URL": {
 				"type": "info",
 				"label": "Stripe webhook URL",
-				"description": "Add this endpoint in Stripe \u2192 Developers \u2192 Webhooks, listening for checkout.session.completed.",
+				"description": "Add this endpoint in Stripe → Developers → Webhooks, listening for checkout.session.completed.",
 				"value": "{{origin}}/billing-webhook/stripe",
 				"showWhen": {
 					"field": "PAYMENT_PROVIDER",
@@ -278,7 +282,7 @@
 			"POLAR_ACCESS_TOKEN": {
 				"type": "secret",
 				"label": "Polar organization access token",
-				"description": "polar_oat_\u2026 with checkouts:write, checkouts:read and customers:write scopes.",
+				"description": "polar_oat_… with checkouts:write, checkouts:read and customers:write scopes.",
 				"showWhen": {
 					"field": "PAYMENT_PROVIDER",
 					"equals": "polar"
@@ -296,7 +300,7 @@
 			"POLAR_WEBHOOK_SECRET": {
 				"type": "secret",
 				"label": "Polar webhook secret",
-				"description": "Secret of the webhook endpoint you create in Polar \u2192 Settings \u2192 Webhooks for the URL below (events: checkout.updated, order.created).",
+				"description": "Secret of the webhook endpoint you create in Polar → Settings → Webhooks for the URL below (events: checkout.updated, order.created).",
 				"showWhen": {
 					"field": "PAYMENT_PROVIDER",
 					"equals": "polar"
@@ -305,7 +309,7 @@
 			"POLAR_WEBHOOK_URL": {
 				"type": "info",
 				"label": "Polar webhook URL",
-				"description": "Add this endpoint in Polar \u2192 Settings \u2192 Webhooks.",
+				"description": "Add this endpoint in Polar → Settings → Webhooks.",
 				"value": "{{origin}}/billing-webhook/polar",
 				"showWhen": {
 					"field": "PAYMENT_PROVIDER",
@@ -356,7 +360,7 @@
 			"DEFAULT_COLOR_SCHEME": {
 				"type": "string",
 				"label": "Default color scheme",
-				"description": "Marketplace color scheme applied to new projects (Admin \u2192 Color schemes); a theme may set its own when applied. Default modern-minimal."
+				"description": "Marketplace color scheme applied to new projects (Admin → Color schemes); a theme may set its own when applied. Default modern-minimal."
 			},
 			"CREDITS_MARKUP": {
 				"type": "string",

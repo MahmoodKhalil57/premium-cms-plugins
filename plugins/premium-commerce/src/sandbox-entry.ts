@@ -5,7 +5,7 @@
 
 import { adminHandler } from "./admin.js";
 import { accountAddressDeleteHandler, accountAddressSaveHandler, accountGetHandler, accountOrdersHandler, accountPaymentMethodDeleteHandler, accountPortalHandler, cartGetHandler, cartGuestHandler, cartSaveHandler } from "./handlers/account.js";
-import { collectBalanceHandler, cartsListHandler, customersListHandler, discountDeleteHandler, discountSaveHandler, discountsListHandler, inventoryAdjustHandler, inventoryListHandler, orderGetHandler, orderRefundHandler, ordersExportHandler, ordersListHandler, orderUpdateHandler, statsHandler, transactionsListHandler } from "./handlers/admin-api.js";
+import { collectBalanceHandler, cartsListHandler, customersListHandler, discountDeleteHandler, discountSaveHandler, discountsListHandler, inventoryAdjustHandler, inventoryListHandler, orderGetHandler, orderRefundHandler, ordersExportHandler, ordersListHandler, orderUpdateHandler, statsHandler, transactionsListHandler, configExportHandler } from "./handlers/admin-api.js";
 import { expirePendingOrders } from "./handlers/cron.js";
 import { internalCancelHandler, internalCatalogHandler, internalConfigHandler, internalCreateOrderHandler, internalExtensionHandler, internalFulfilHandler, internalLegacyExportHandler, internalOrderHandler, internalOrdersHandler, internalSettleHandler } from "./handlers/internal.js";
 import { accountCheckoutHandler, availabilityHandler, catalogHandler, checkoutHandler, confirmHandler, discountPreviewHandler, orderDesignHandler, orderLookupHandler, uploadHandler, webhookHandler } from "./handlers/public.js";
@@ -69,6 +69,7 @@ export default definePlugin({
 		"transactions/list": { handler: validated(listSchema, transactionsListHandler as never) },
 		"discounts/list": { handler: validated(listSchema, discountsListHandler as never) },
 		"discounts/save": { handler: validated(discountSaveSchema, discountSaveHandler as never) },
+		"config/export": { handler: route(configExportHandler as never) },
 		"discounts/delete": { handler: validated(discountDeleteSchema, discountDeleteHandler as never) },
 		"inventory/list": { handler: route(inventoryListHandler as never) },
 		"inventory/adjust": { handler: validated(inventoryAdjustSchema, inventoryAdjustHandler as never) },

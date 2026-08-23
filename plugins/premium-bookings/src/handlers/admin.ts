@@ -78,6 +78,12 @@ export async function servicesListHandler(ctx: RouteContext<{ kind?: string }>) 
 }
 
 export async function serviceSaveHandler(ctx: RouteContext<{ id?: string; record: Record<string, unknown> }>) {
+	// Seeds and theme snapshots reference resources by NAME — ids differ across sites.
+	if (Array.isArray(ctx.input.record.resourceNames)) {
+		const byName = new Map((await resources(ctx).query({ limit: 500 })).items.map((r) => [r.data.name.toLowerCase(), r.id]));
+		ctx.input.record.resourceIds = (ctx.input.record.resourceNames as unknown[]).map((n) => byName.get(String(n).toLowerCase())).filter((x): x is string => Boolean(x));
+		delete ctx.input.record.resourceNames;
+	}
 	const match = ctx.input.id ? null : await findByKey(services(ctx), "slug", ctx.input.record.slug ?? (ctx.input.record.title ? String(ctx.input.record.title).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") : undefined));
 	const existing = ctx.input.id ? await services(ctx).get(ctx.input.id) : (match?.data ?? null);
 	const rec = normalizeService({ ...ctx.input.record, ...(ctx.callerPlugin ? { managedBy: ctx.callerPlugin } : {}) }, existing ?? undefined);
@@ -193,4 +199,46 @@ export async function adminHandler(ctx: RouteContext<{ type?: string; page?: str
 			: { type: "context", text: "No bookings yet." },
 	];
 	return { blocks };
+}
+
+/* ---- config export (theme snapshots) ---------------------------------------- */
+
+const EXPORT_SETTING_KEYS = ["timezone", "slotIntervalMin", "leadTimeHours", "horizonDays", "holdMinutes", "cancelHours", "businessName", "currency", "managePath"];
+
+/**
+ * The plugin's current setup as a theme-seed `plugins.<id>` fragment
+ * ({ settings, calls }): what bin/snapshot-theme.sh in the themes repo turns a
+ * live project into. Site-specific values (record ids, linked users, sync
+ * mirrors, the notify email) and secrets are left out; services reference
+ * staff by NAME (`resourceNames`, resolved by services/save on the target).
+ */
+export async function configExportHandler(ctx: RouteContext) {
+	const rows = (await ctx.kv.list("settings:").catch(() => null)) ?? [];
+	const bag: Record<string, unknown> = Object.fromEntries(rows.map((r) => [r.key.replace(/^settings:/, ""), r.value]));
+	const settings: Record<string, unknown> = {};
+	for (const k of EXPORT_SETTING_KEYS) {
+		const v = bag[k];
+		if (v !== undefined && v !== null && v !== "") settings[k] = v;
+	}
+	const calls: Array<{ route: string; body?: unknown; ignoreErrors?: boolean }> = [];
+	const strip = (data: unknown, drop: string[]): Record<string, unknown> => {
+		const d = { ...(data as Record<string, unknown>) };
+		for (const k of drop) delete d[k];
+		return d;
+	};
+	const res = (await resources(ctx).query({ limit: 500 })).items.filter((r) => !r.data.managedBy);
+	const names = new Map(res.map((r) => [r.id, r.data.name]));
+	for (const r of [...res].sort((a, b) => a.data.sortOrder - b.data.sortOrder || a.data.name.localeCompare(b.data.name))) {
+		calls.push({ route: "resources/save", body: { record: strip(r.data, ["userId", "externalId", "managedBy", "createdAt", "updatedAt"]) } });
+	}
+	const svc = (await services(ctx).query({ limit: 500 })).items.filter((s) => !s.data.managedBy);
+	for (const s of [...svc].sort((a, b) => a.data.sortOrder - b.data.sortOrder || a.data.title.localeCompare(b.data.title))) {
+		const rec = strip(s.data, ["resourceIds", "managedBy", "createdAt", "updatedAt"]);
+		rec.resourceNames = (s.data.resourceIds ?? []).map((rid) => names.get(rid)).filter(Boolean);
+		calls.push({ route: "services/save", body: { record: rec } });
+	}
+	for (const a of (await automations(ctx).query({ limit: 100 })).items) {
+		calls.push({ route: "automations/save", body: { record: strip(a.data, ["createdAt", "updatedAt"]) } });
+	}
+	return { settings, calls };
 }

@@ -110,6 +110,21 @@ async function refreshHandler(ctx: RouteContext) {
 	return { ok: true, reviews: fresh.reviews.length, rating: fresh.rating };
 }
 
+
+/* ---- config export (theme snapshots) ---------------------------------------- */
+
+/** Non-secret settings as a theme-seed fragment (the Places API key stays out). */
+async function configExportHandler(ctx: PluginContext) {
+	const s = await settings(ctx);
+	const out: Record<string, unknown> = {};
+	for (const k of KEYS) {
+		if (k === "googlePlacesApiKey") continue;
+		const v = (s as Record<string, unknown>)[k];
+		if (v !== undefined && v !== null && v !== "") out[k] = v;
+	}
+	return { settings: out, calls: [] };
+}
+
 export default definePlugin({
 	hooks: {
 		"plugin:activate": {
@@ -130,5 +145,6 @@ export default definePlugin({
 		config: { public: true, handler: route(configHandler as never) },
 		reviews: { public: true, handler: route(reviewsHandler as never) },
 		"reviews/refresh": { handler: route(refreshHandler as never) },
+		"config/export": { handler: route(configExportHandler as never) },
 	},
 });

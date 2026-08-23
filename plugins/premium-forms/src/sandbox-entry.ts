@@ -4,7 +4,7 @@
  */
 import { adminHandler } from "./admin.js";
 import { handleCleanup, handleDigest } from "./handlers/cron.js";
-import { formsCreateHandler, formsDeleteHandler, formsDuplicateHandler, formsListHandler, formsUpdateHandler } from "./handlers/forms.js";
+import { formsCreateHandler, formsDeleteHandler, formsDuplicateHandler, formsListHandler, formsUpdateHandler, configExportHandler } from "./handlers/forms.js";
 import { exportHandler, submissionDeleteHandler, submissionGetHandler, submissionsListHandler, submissionUpdateHandler } from "./handlers/submissions.js";
 import { definitionHandler, submitHandler } from "./handlers/submit.js";
 import {
@@ -62,6 +62,7 @@ export default definePlugin({
 		},
 		admin: { handler: route(adminHandler as never) },
 		"forms/list": { handler: route(formsListHandler as never) },
+		"config/export": { handler: route(configExportHandler as never) },
 		"forms/create": { handler: validated(formCreateSchema, formsCreateHandler as never) },
 		"forms/update": { handler: validated(formUpdateSchema, formsUpdateHandler as never) },
 		"forms/delete": { handler: validated(formDeleteSchema, formsDeleteHandler as never) },

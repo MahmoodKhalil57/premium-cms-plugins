@@ -268,3 +268,21 @@ async function deleteFormSubmissions(formId: string, ctx: RouteContext) {
 		cursor = batch.cursor;
 	} while (cursor);
 }
+
+/* ---- config export (theme snapshots) ---------------------------------------- */
+
+/**
+ * Every form definition as idempotent theme-seed `forms/create` calls
+ * (`ignoreErrors` — create conflicts when the slug already exists, which is
+ * exactly the re-run case). Submissions and digests are runtime data.
+ */
+export async function configExportHandler(ctx: RouteContext) {
+	const res = await forms(ctx).query({ limit: 100 });
+	const calls = [...res.items]
+		.sort((a, b) => String((a.data as { slug?: string }).slug ?? "").localeCompare(String((b.data as { slug?: string }).slug ?? "")))
+		.map((f) => {
+			const d = f.data as unknown as Record<string, unknown>;
+			return { route: "forms/create", body: { name: d.name, slug: d.slug, pages: d.pages, settings: d.settings }, ignoreErrors: true };
+		});
+	return { settings: {}, calls };
+}

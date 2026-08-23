@@ -1,6 +1,6 @@
 {
 	"id": "premium-forms",
-	"version": "0.5.0",
+	"version": "0.5.1",
 	"capabilities": [
 		"email:send",
 		"network:request:unrestricted",
@@ -94,6 +94,10 @@
 		{
 			"name": "submissions/export",
 			"permission": "premium-forms:submissions:read"
+		},
+		{
+			"name": "config/export",
+			"permission": "premium-forms:forms:manage"
 		}
 	],
 	"admin": {

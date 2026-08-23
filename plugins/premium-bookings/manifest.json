@@ -1,6 +1,6 @@
 {
 	"id": "premium-bookings",
-	"version": "1.0.3",
+	"version": "1.0.4",
 	"capabilities": [
 		"email:send",
 		"users:read",
@@ -219,6 +219,10 @@
 		},
 		{
 			"name": "migrate/commerce",
+			"permission": "premium-bookings:setup:manage"
+		},
+		{
+			"name": "config/export",
 			"permission": "premium-bookings:setup:manage"
 		}
 	],

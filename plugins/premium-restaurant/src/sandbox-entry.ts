@@ -2,7 +2,7 @@
  * premium-restaurant — sandbox entry (runs in the plugin isolate).
  * Capabilities, storage and admin metadata live in manifest.json.
  */
-import { adminHandler, boardHandler, orderStatusHandler, printerDeleteHandler, printerSaveHandler, printersListHandler, printTestHandler, reservationsListHandler, reservationsSyncHandler, shiftsListHandler, staffDeleteHandler, staffListHandler, staffSaveHandler, tableDeleteHandler, tableSaveHandler, tablesListHandler } from "./handlers/admin.js";
+import { adminHandler, boardHandler, orderStatusHandler, printerDeleteHandler, printerSaveHandler, printersListHandler, printTestHandler, reservationsListHandler, reservationsSyncHandler, shiftsListHandler, staffDeleteHandler, staffListHandler, staffSaveHandler, tableDeleteHandler, tableSaveHandler, tablesListHandler, configExportHandler } from "./handlers/admin.js";
 import { commerceCheckoutHandler, internalFulfilmentHandler, onCommerceEvent } from "./handlers/internal.js";
 import { configHandler, menuHandler, slotsHandler, tableHandler, trackHandler, zoneHandler } from "./handlers/public.js";
 import { kdsBumpHandler, kdsTicketsHandler, posDispatchHandler, posMenuHandler, posOrderHandler, posOrdersHandler, posPayHandler, posVoidHandler, printAckHandler, printJobsHandler, reprintHandler, shiftCloseHandler, shiftHandler, shiftMovementHandler, shiftOpenHandler, staffLoginHandler, staffLogoutHandler, staffMeHandler } from "./handlers/staff.js";
@@ -100,6 +100,7 @@ export default definePlugin({
 		"reservations/sync": { handler: route(reservationsSyncHandler as never) },
 		"reservations/list": { handler: validated(v.object({ from: v.string({ max: 40 }).optional(), to: v.string({ max: 40 }).optional() }), reservationsListHandler as never) },
 		"migrate/commerce": { handler: route(migrateFromCommerceHandler as never) },
+		"config/export": { handler: route(configExportHandler as never) },
 		// Sibling plugins
 		"commerce/checkout": { handler: route(commerceCheckoutHandler as never) },
 		"internal/fulfilment": { handler: validated(recordDelete, internalFulfilmentHandler as never) },
