@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Pre-commit: the same typecheck CI runs before it publishes.
+#
+# This repo ships to every project on the platform on push and has no tests, so
+# `bin/check.sh` is the only gate that exists. ~25s across the six plugins.
+# `git commit --no-verify` skips it; CI runs it again regardless.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+echo "pre-commit: typechecking every plugin (bin/check.sh)"
+bash bin/check.sh
