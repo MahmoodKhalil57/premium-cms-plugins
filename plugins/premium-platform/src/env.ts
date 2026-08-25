@@ -227,3 +227,31 @@ export function randomToken(bytes = 32): string {
 	for (const b of buf) bin += String.fromCharCode(b);
 	return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
+
+/**
+ * A theme from our marketplace catalogue (deploy service), or null when unknown.
+ *
+ * Lives here rather than in handlers.ts because provisioner.ts needs it too, and
+ * handlers.ts already imports from provisioner.
+ */
+export async function marketplaceTheme(
+	ctx: PluginContext,
+	env: ProviderEnv,
+	id: string,
+): Promise<{ id: string; premiumcms?: { templateRepo?: string; plugins?: string[]; colorScheme?: string } | null } | null> {
+	const res = await http(ctx, `${env.DEPLOY_SERVICE_URL}/api/v1/themes/${encodeURIComponent(id)}`, { method: "GET" });
+	if (!res.ok) return null;
+	return res.json<{ id: string; premiumcms?: { templateRepo?: string; plugins?: string[]; colorScheme?: string } | null }>();
+}
+
+/**
+ * The colour scheme a project should have: the one its theme declares, else the
+ * platform default. theme.json is the source of truth so a scheme ships with the
+ * theme through git like the rest of its content.
+ */
+export async function themeColorScheme(ctx: PluginContext, env: ProviderEnv, themeId: string | null | undefined): Promise<string> {
+	const fallback = env.DEFAULT_COLOR_SCHEME?.trim() || "modern-minimal";
+	if (!themeId) return fallback;
+	const theme = await marketplaceTheme(ctx, env, themeId).catch(() => null);
+	return theme?.premiumcms?.colorScheme?.trim() || fallback;
+}

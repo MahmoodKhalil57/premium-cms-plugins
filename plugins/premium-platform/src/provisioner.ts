@@ -11,7 +11,7 @@
 import { pushCreditsSettings } from "./credits.js";
 import { templateRepoFor } from "./github.js";
 import type { ProviderEnv } from "./env.js";
-import { cfApi, cfZone, cfZoneId, deployService, httpJson, http, randomToken, loadEnv } from "./env.js";
+import { cfApi, cfZone, cfZoneId, deployService, httpJson, http, randomToken, loadEnv, themeColorScheme } from "./env.js";
 import { githubPagesOrigin } from "./github.js";
 import { deleteProjectRows, getDomains, getProject, projects, type ProjectRow, updateProject } from "./registry.js";
 import { sesDeleteIdentity } from "./ses.js";
@@ -132,7 +132,7 @@ export async function setupCms(ctx: PluginContext, id: string): Promise<{ projec
 			siteTitle: project.site_title,
 			tagline: project.tagline ?? undefined,
 			siteUrl: `https://${project.hostname}`,
-			colorScheme: env.DEFAULT_COLOR_SCHEME?.trim() || "modern-minimal",
+			colorScheme: await themeColorScheme(ctx, env, project.theme_id),
 		}, { "x-provision-secret": project.provision_secret ?? "" });
 	} catch (err) {
 		return { project, retryable: true, detail: `fetch failed: ${String(err)}` };

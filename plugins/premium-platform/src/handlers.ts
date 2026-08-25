@@ -7,7 +7,7 @@
  */
 
 import { applyDnsRecords, detectDnsHost, deleteChildSecret, type DnsApplyCreds, emailDomainStatus, patchChildSecrets, setEmailDomain, setSiteDomain, siteDomainStatus } from "./domains.js";
-import { deployService, http, loadEnv, type ProviderEnv, siteUrl, randomToken } from "./env.js";
+import { deployService, http, loadEnv, marketplaceTheme, type ProviderEnv, siteUrl, randomToken } from "./env.js";
 import { githubAuthorizeUrl, githubCompleteInstall, githubCompleteOAuth, githubConfigured, githubCreateRepo, githubDisconnect, githubPagesOrigin, githubSyncTheme, githubThemeDrift, githubRebuild, frontendTemplateRepo, peekState, templateRepoFor } from "./github.js";
 import { attachDomain, createProject, deployWorker, destroyProject, setupCms } from "./provisioner.js";
 import { type DomainRow, domains, getDomains, getProject, listProjects, type ProjectRow, projects, updateProject } from "./registry.js";
@@ -286,12 +286,6 @@ export async function childGithub(ctx: RouteContext<{ id?: string; secret?: stri
 	}
 }
 
-/** A theme from our marketplace catalogue (deploy service), or null when unknown. */
-async function marketplaceTheme(ctx: PluginContext, env: ProviderEnv, id: string): Promise<{ id: string; premiumcms?: { templateRepo?: string; plugins?: string[]; colorScheme?: string } | null } | null> {
-	const res = await http(ctx, `${env.DEPLOY_SERVICE_URL}/api/v1/themes/${encodeURIComponent(id)}`, { method: "GET" });
-	if (!res.ok) return null;
-	return res.json<{ id: string; premiumcms?: { templateRepo?: string } | null }>();
-}
 
 /** Provider action: (re)apply the theme's content seed to a project (pages designed for the page builder, sections, menus). */
 export async function projectSeed(ctx: RouteContext<{ id?: string }>) {
@@ -474,7 +468,7 @@ export async function fleetSync(ctx: RouteContext<{ key?: string; op?: string; p
 				// Re-applying a theme means its plugin list first (a theme may start needing a new plugin), then the seed.
 				const theme = p.theme_id ? await marketplaceTheme(ctx, env, p.theme_id).catch(() => null) : null;
 				if (theme?.premiumcms?.plugins?.length) {
-					const res = await http(ctx, `https://${p.hostname}/platform/plugins-sync`, { method: "POST", headers: { "x-provision-secret": p.provision_secret!, "Content-Type": "application/json" }, body: JSON.stringify({ install: theme.premiumcms.plugins }) });
+					const res = await http(ctx, `https://${p.hostname}/platform/plugins-sync`, { method: "POST", headers: { "x-provision-secret": p.provision_secret!, "Content-Type": "application/json" }, body: JSON.stringify({ install: theme.premiumcms.plugins, colorScheme: theme.premiumcms.colorScheme }) });
 					if (!res.ok) throw new Error(`plugins-sync: ${(JSON.parse(res.text || "{}") as { error?: string }).error ?? res.status}`);
 				}
 				const r = await deployService<{ applied: boolean; entries: number; status: number; detail?: string }>(ctx, env, "/api/v1/theme-seed", { template: templateRepoFor(env, p), cmsUrl: `https://${p.hostname}`, secret: p.provision_secret });
