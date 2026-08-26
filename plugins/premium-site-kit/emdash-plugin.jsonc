@@ -1,9 +1,0 @@
-{
-	"slug": "premium-site-kit",
-	"name": "Site Kit",
-	"description": "Business profile → schema.org JSON-LD, analytics (GA4 / GTM / Cloudflare Web Analytics) behind a cookie-consent banner, Search Console verification and a live Google reviews feed.",
-	"license": "MIT",
-	"author": { "name": "PremiumCMS" },
-	"keywords": ["seo", "schema", "analytics", "consent", "gdpr", "google-reviews"],
-	"homepage": "https://premium-cms.com"
-}

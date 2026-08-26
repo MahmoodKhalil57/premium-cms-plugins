@@ -1,9 +1,0 @@
-{
-	"slug": "premium-forms",
-	"name": "Forms",
-	"description": "Forms with validation, spam protection, notifications, digests, webhooks and CSV export — sandboxed and installable from the marketplace.",
-	"license": "MIT",
-	"author": { "name": "PremiumCMS" },
-	"keywords": ["forms", "contact", "submissions"],
-	"homepage": "https://premium-cms.com"
-}

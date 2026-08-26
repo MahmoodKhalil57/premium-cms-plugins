@@ -1,5 +1,0 @@
-{
-	"id": "premium-forms",
-	"dependsOn": [],
-	"description": "Form renderer (fields, conditions, signatures, print designs) and the pre-rendered <CmsForm> component."
-}

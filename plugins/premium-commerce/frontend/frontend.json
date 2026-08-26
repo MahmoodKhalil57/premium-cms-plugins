@@ -1,7 +1,0 @@
-{
-	"id": "premium-commerce",
-	"dependsOn": [
-		"premium-forms"
-	],
-	"description": "Shop pages (products, cart, checkout success), cart drawer, accounts, product options; checkout extension hook for other plugins."
-}

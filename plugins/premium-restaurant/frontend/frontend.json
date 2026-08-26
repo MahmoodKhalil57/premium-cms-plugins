@@ -1,8 +1,0 @@
-{
-	"id": "premium-restaurant",
-	"dependsOn": [
-		"premium-commerce",
-		"premium-bookings"
-	],
-	"description": "Menu + QR table ordering, order tracking, reservations, the staff app; adds the delivery / pickup / dine-in step to the Commerce checkout."
-}
