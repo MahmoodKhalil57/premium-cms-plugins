@@ -30,6 +30,14 @@ exercises every extension point you are likely to need:
 
 Read it before writing a new plugin, then copy the shape.
 
+**`plugins/cloudflare-email-byo`** is the second worked example, and the one to
+read for anything that holds a user-supplied secret or calls an external API:
+it sends email through the site owner's own Cloudflare account using an API
+token entered in the admin. It shows the exclusive-hook pattern
+(`email:deliver`), host-restricted egress via `allowedHosts`, and the handling
+a credential needs — never logged, never returned by a route, never wiped by an
+empty form submission.
+
 ## Adding a plugin
 
 ```bash

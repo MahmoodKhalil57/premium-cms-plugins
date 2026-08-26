@@ -10,8 +10,8 @@
         "vitest": "^4.1.5",
       },
     },
-    "plugins/premium-starter": {
-      "name": "@premium-cms/plugin-starter",
+    "plugins/cloudflare-email-byo": {
+      "name": "@premium-cms/plugin-cloudflare-email-byo",
       "version": "0.1.0",
       "devDependencies": {
         "@emdash-cms/plugin-cli": "^0.8.1",
@@ -24,8 +24,8 @@
         "emdash": ">=0.35.0",
       },
     },
-    "plugins/scaffold-check": {
-      "name": "@premium-cms/plugin-scaffold-check",
+    "plugins/premium-starter": {
+      "name": "@premium-cms/plugin-starter",
       "version": "0.1.0",
       "devDependencies": {
         "@emdash-cms/plugin-cli": "^0.8.1",
@@ -390,7 +390,7 @@
 
     "@portabletext/types": ["@portabletext/types@4.0.2", "", {}, "sha512-djfIGU9n6DRrunlvj2nIDAp17URo/nA4jSXGvf+Gupx8NLLy9fmJBZ3GL8yhqn9lSVc+cKCharjOa3aOBnWbRw=="],
 
-    "@premium-cms/plugin-scaffold-check": ["@premium-cms/plugin-scaffold-check@workspace:plugins/scaffold-check"],
+    "@premium-cms/plugin-cloudflare-email-byo": ["@premium-cms/plugin-cloudflare-email-byo@workspace:plugins/cloudflare-email-byo"],
 
     "@premium-cms/plugin-starter": ["@premium-cms/plugin-starter@workspace:plugins/premium-starter"],
 
