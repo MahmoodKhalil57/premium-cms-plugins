@@ -1,0 +1,20 @@
+{
+	"name": "premium-cms-plugins",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "PremiumCMS marketplace plugins for EmDash",
+	"workspaces": ["plugins/*"],
+	"scripts": {
+		"build": "npm run build --workspaces --if-present",
+		"test": "npm run test --workspaces --if-present",
+		"typecheck": "npm run typecheck --workspaces --if-present",
+		"validate": "for d in plugins/*/; do npx @emdash-cms/plugin-cli validate \"$d\"; done",
+		"new": "bin/new-plugin.sh"
+	},
+	"devDependencies": {
+		"@emdash-cms/plugin-cli": "^0.8.1",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.5"
+	}
+}
