@@ -28,8 +28,6 @@
 	"storage": {},
 
 	"admin": {
-		"pages": [
-			{ "path": "/settings", "label": "Email (own Cloudflare)", "icon": "mail" },
-		],
+		"pages": [{ "path": "/settings", "label": "Email (own Cloudflare)", "icon": "mail" }],
 	},
 }

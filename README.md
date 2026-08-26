@@ -19,14 +19,14 @@ plugins/<slug>/
 plugin (it flags published content that has gone stale) chosen because it
 exercises every extension point you are likely to need:
 
-| Surface | Where it shows up |
-| --- | --- |
-| Content hooks | `content:afterSave` / `content:afterDelete` maintain an index |
-| Lifecycle hooks | `plugin:install` seeds default settings |
-| Storage | the `tracked` collection, with indexes declared in the manifest |
-| Settings | `ctx.kv` under a `settings:` prefix |
-| JSON routes | `stale`, `settings`, `settings/save` |
-| Admin UI | a `/freshness` page and a dashboard widget, both Block Kit |
+| Surface         | Where it shows up                                               |
+| --------------- | --------------------------------------------------------------- |
+| Content hooks   | `content:afterSave` / `content:afterDelete` maintain an index   |
+| Lifecycle hooks | `plugin:install` seeds default settings                         |
+| Storage         | the `tracked` collection, with indexes declared in the manifest |
+| Settings        | `ctx.kv` under a `settings:` prefix                             |
+| JSON routes     | `stale`, `settings`, `settings/save`                            |
+| Admin UI        | a `/freshness` page and a dashboard widget, both Block Kit      |
 
 Read it before writing a new plugin, then copy the shape.
 
@@ -82,7 +82,7 @@ and TypeScript rejects it (TS2883). Write this instead — it keeps identical
 per-hook and per-route inference:
 
 ```ts
-const plugin: SandboxedPlugin = { /* ... */ };
+const plugin: SandboxedPlugin = {/* ... */};
 export default plugin;
 ```
 
@@ -100,3 +100,29 @@ up that handle or replace it with a `did:plc:...` you control, then
 `bun install` at the repo root; per-plugin scripts run through `npx`. The
 EmDash plugin build emits TypeScript declarations, so it is sensitive to
 module resolution — if you see TS2883, check the export form above.
+
+## CI
+
+`.github/workflows/ci.yml` runs on every push and PR: formatting, JSON/JSONC
+validity, then per plugin — manifest validate, typecheck, test, build. Each
+plugin is its own matrix job, so one failing plugin does not mask the others.
+On `main` it also bundles and keeps the tarball as a build artifact.
+
+**It deliberately does not deploy or rebuild any theme.** Plugins and themes are
+separate: a plugin reaches a site through the registry, not by being compiled
+into every theme. If a plugin drops something a theme depends on, that theme
+should fail on its own next deploy rather than triggering a fleet-wide rebuild.
+
+Publishing is still a manual step — `emdash-plugin publish` signs the release
+into the publisher's atproto identity, and `plugins.premium-cms.com` does not
+resolve yet.
+
+## Hooks
+
+`husky` runs a deliberately minimal pre-commit: format staged files, validate
+JSON/JSONC. Typechecks, tests and builds stay in CI — a pre-commit slow enough
+to be annoying is one people bypass with `--no-verify`.
+
+```bash
+bun install     # installs the hook via the prepare script
+```

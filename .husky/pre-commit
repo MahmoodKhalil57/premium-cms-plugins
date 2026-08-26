@@ -1,0 +1,4 @@
+# Minimal by design: format staged files and validate JSON/JSONC.
+# Typechecks, tests, manifest validation and builds run in CI — a slow
+# pre-commit is one people bypass with --no-verify.
+bunx lint-staged

@@ -1,0 +1,7 @@
+{
+	"useTabs": true,
+	"printWidth": 100,
+	"semi": true,
+	"trailingComma": "all",
+	"overrides": [{ "files": ["*.md"], "options": { "useTabs": false, "proseWrap": "preserve" } }]
+}

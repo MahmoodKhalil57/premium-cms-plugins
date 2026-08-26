@@ -1,0 +1,110 @@
+name: Plugins CI
+
+# Deliberately does NOT trigger a theme deploy. Plugins and themes are
+# separate: a plugin reaches a site through the registry, not by being rebuilt
+# into every theme. If a plugin drops a feature a theme relies on, that theme
+# should break on its own next deploy — not force hundreds of rebuilds here.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: plugins-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  repo:
+    name: Repo checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install
+      - name: Formatting
+        run: bunx prettier --check .
+      - name: JSON / JSONC validity
+        run: |
+          set -euo pipefail
+          mapfile -t FILES < <(git ls-files '*.json' '*.jsonc')
+          node bin/check-json.mjs "${FILES[@]}"
+
+  discover:
+    name: Discover plugins
+    runs-on: ubuntu-latest
+    outputs:
+      plugins: ${{ steps.list.outputs.plugins }}
+      count: ${{ steps.list.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        run: |
+          set -euo pipefail
+          PLUGINS=$(for d in plugins/*/; do [ -f "$d/emdash-plugin.jsonc" ] && basename "$d"; done \
+            | python3 -c "import sys,json; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))")
+          echo "plugins=$PLUGINS" >> "$GITHUB_OUTPUT"
+          echo "count=$(python3 -c 'import json,sys; print(len(json.loads(sys.argv[1])))' "$PLUGINS")" >> "$GITHUB_OUTPUT"
+          echo "Found: $PLUGINS"
+
+  plugin:
+    name: ${{ matrix.plugin }}
+    needs: discover
+    if: needs.discover.outputs.count != '0'
+    runs-on: ubuntu-latest
+    strategy:
+      # Every plugin reports independently — one failure should not hide the
+      # state of the others.
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJson(needs.discover.outputs.plugins) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install
+
+      - name: Validate manifest
+        working-directory: plugins/${{ matrix.plugin }}
+        run: bunx emdash-plugin validate .
+
+      - name: Typecheck
+        working-directory: plugins/${{ matrix.plugin }}
+        run: bunx tsc --noEmit
+
+      - name: Test
+        working-directory: plugins/${{ matrix.plugin }}
+        run: bunx vitest run
+
+      - name: Build
+        working-directory: plugins/${{ matrix.plugin }}
+        run: bunx emdash-plugin build
+
+      # The distributable tarball. Publishing to the registry is a separate,
+      # deliberate step — `emdash-plugin publish` signs into the publisher's
+      # atproto identity, which is not stood up yet (see the repo README).
+      # Until then the bundle is kept as a build artifact so a release can be
+      # cut from a known-good commit.
+      - name: Bundle
+        if: github.ref == 'refs/heads/main'
+        working-directory: plugins/${{ matrix.plugin }}
+        run: bunx emdash-plugin bundle
+
+      - name: Upload bundle
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.plugin }}-bundle
+          path: |
+            plugins/${{ matrix.plugin }}/dist/*.tar.gz
+            plugins/${{ matrix.plugin }}/dist/manifest.json
+          # `error`, not `warn`: a bundle step that produced nothing is a
+          # broken release path, and a warning in a green run hides it.
+          if-no-files-found: error
+          retention-days: 30

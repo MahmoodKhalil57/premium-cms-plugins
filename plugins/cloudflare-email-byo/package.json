@@ -12,7 +12,10 @@
 		},
 		"./sandbox": "./dist/plugin.mjs"
 	},
-	"files": ["dist", "emdash-plugin.jsonc"],
+	"files": [
+		"dist",
+		"emdash-plugin.jsonc"
+	],
 	"scripts": {
 		"build": "emdash-plugin build",
 		"dev": "emdash-plugin dev",

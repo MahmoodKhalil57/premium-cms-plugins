@@ -256,9 +256,7 @@ describe("settings", () => {
 
 describe("admin route", () => {
 	it("renders the freshness page with a table and a settings form", async () => {
-		const { ctx } = makeTestContext([
-			{ id: "posts:1", data: published("posts", "Ancient", 90) },
-		]);
+		const { ctx } = makeTestContext([{ id: "posts:1", data: published("posts", "Ancient", 90) }]);
 		const result = (await callAdmin(ctx, { type: "page_load", page: "/freshness" })) as {
 			blocks: Array<Record<string, unknown>>;
 		};
@@ -269,9 +267,7 @@ describe("admin route", () => {
 	});
 
 	it("renders the widget", async () => {
-		const { ctx } = makeTestContext([
-			{ id: "posts:1", data: published("posts", "Ancient", 90) },
-		]);
+		const { ctx } = makeTestContext([{ id: "posts:1", data: published("posts", "Ancient", 90) }]);
 		const result = (await callAdmin(ctx, {
 			type: "page_load",
 			page: "widget:stale-content",

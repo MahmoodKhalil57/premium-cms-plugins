@@ -9,7 +9,7 @@ platform's account, on the platform's sending domain and reputation, against
 the platform's quota.
 
 This provider calls the Cloudflare Email Sending **REST API** with an API token
-the owner enters in the admin, so mail leaves from *their* account and *their*
+the owner enters in the admin, so mail leaves from _their_ account and _their_
 verified domain. The platform never holds the credential.
 
 ## Setup (for the site owner)
@@ -26,13 +26,13 @@ With both this and the built-in provider installed, the choice must be explicit.
 
 ## Settings
 
-| Field | Notes |
-| --- | --- |
-| Account ID | 32 hex characters; validated before any request is made |
-| API token | Stored in plugin KV, never returned by any route or rendered into a page |
-| Send from | Must be on a domain onboarded for Email Sending in *your* account |
-| Sender name | Optional |
-| Reply-To | Optional |
+| Field       | Notes                                                                    |
+| ----------- | ------------------------------------------------------------------------ |
+| Account ID  | 32 hex characters; validated before any request is made                  |
+| API token   | Stored in plugin KV, never returned by any route or rendered into a page |
+| Send from   | Must be on a domain onboarded for Email Sending in _your_ account        |
+| Sender name | Optional                                                                 |
+| Reply-To    | Optional                                                                 |
 
 Leaving the token field blank on save **keeps** the stored token — Block Kit
 submits an empty string for an untouched secret field, so writing it blindly
@@ -59,11 +59,11 @@ for means a bug or a bad setting cannot post it anywhere else.
 Field names differ, and getting them wrong produces a 400 that reads like a
 domain-verification problem:
 
-| Workers binding | REST API |
-| --- | --- |
-| `from: { email, name }` | `from: { address, name }` |
-| `replyTo` | `reply_to` |
-| returns `messageId` | returns `delivered` / `permanent_bounces` / `queued` |
+| Workers binding         | REST API                                             |
+| ----------------------- | ---------------------------------------------------- |
+| `from: { email, name }` | `from: { address, name }`                            |
+| `replyTo`               | `reply_to`                                           |
+| returns `messageId`     | returns `delivered` / `permanent_bounces` / `queued` |
 
 A permanent bounce comes back on **HTTP 200** with the recipient listed in
 `permanent_bounces`, so a naive status check reports success on a message that

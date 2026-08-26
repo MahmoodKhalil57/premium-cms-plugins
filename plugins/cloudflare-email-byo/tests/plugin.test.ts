@@ -65,9 +65,15 @@ const GOOD = {
 	fromName: "Example",
 };
 
-async function callDeliver(ctx: import("emdash").PluginContext, message?: Partial<{
-	to: string; subject: string; text: string; html: string;
-}>) {
+async function callDeliver(
+	ctx: import("emdash").PluginContext,
+	message?: Partial<{
+		to: string;
+		subject: string;
+		text: string;
+		html: string;
+	}>,
+) {
 	const hook = plugin.hooks?.["email:deliver"];
 	if (!hook || typeof hook !== "object" || !("handler" in hook)) throw new Error("no hook");
 	return hook.handler(
@@ -87,7 +93,9 @@ async function callDeliver(ctx: import("emdash").PluginContext, message?: Partia
 async function callAdmin(ctx: import("emdash").PluginContext, input: unknown) {
 	const route = plugin.routes?.admin;
 	if (!route || typeof route !== "object" || !("handler" in route)) throw new Error("no route");
-	return (await route.handler({ input } as never, ctx)) as { blocks: Array<Record<string, unknown>> };
+	return (await route.handler({ input } as never, ctx)) as {
+		blocks: Array<Record<string, unknown>>;
+	};
 }
 
 async function callRoute(ctx: import("emdash").PluginContext, name: string, input: unknown = {}) {

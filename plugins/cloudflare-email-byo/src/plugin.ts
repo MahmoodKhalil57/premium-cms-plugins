@@ -163,12 +163,16 @@ function describeFailure(status: number, body: CloudflareEnvelope | null): strin
  * `replyTo`). Getting these wrong yields a 400 that reads like a domain
  * problem, so they are easy to misdiagnose.
  */
-async function deliver(ctx: PluginContext, settings: Settings, message: {
-	to: string;
-	subject: string;
-	text: string;
-	html?: string;
-}): Promise<void> {
+async function deliver(
+	ctx: PluginContext,
+	settings: Settings,
+	message: {
+		to: string;
+		subject: string;
+		text: string;
+		html?: string;
+	},
+): Promise<void> {
 	if (!ctx.http) {
 		throw new Error(
 			"[cloudflare-email-byo] ctx.http is unavailable — the plugin needs the " +

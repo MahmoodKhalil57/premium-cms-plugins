@@ -8,38 +8,38 @@ small; the point is that it exercises every extension point a real plugin uses.
 
 ## What to look at
 
-| Read this for | In `src/plugin.ts` |
-| --- | --- |
-| Keeping an index in sync with content | `content:afterSave` / `content:afterDelete` hooks |
-| Seeding defaults on install | `plugin:install` |
-| Querying your own storage | `findStale` — note `where` only works on declared indexes |
-| Reading + writing settings | `readSettings` / `saveSettings`, over `ctx.kv` |
-| Rendering an admin page | `buildFreshnessPage` — Block Kit table + form |
-| Rendering a dashboard widget | `buildStaleWidget` |
-| Routing admin interactions | the `admin` route's dispatch on `type` / `page` / `action_id` |
-| Testing without a CMS | `tests/plugin.test.ts` and its `makeTestContext` stub |
+| Read this for                         | In `src/plugin.ts`                                            |
+| ------------------------------------- | ------------------------------------------------------------- |
+| Keeping an index in sync with content | `content:afterSave` / `content:afterDelete` hooks             |
+| Seeding defaults on install           | `plugin:install`                                              |
+| Querying your own storage             | `findStale` — note `where` only works on declared indexes     |
+| Reading + writing settings            | `readSettings` / `saveSettings`, over `ctx.kv`                |
+| Rendering an admin page               | `buildFreshnessPage` — Block Kit table + form                 |
+| Rendering a dashboard widget          | `buildStaleWidget`                                            |
+| Routing admin interactions            | the `admin` route's dispatch on `type` / `page` / `action_id` |
+| Testing without a CMS                 | `tests/plugin.test.ts` and its `makeTestContext` stub         |
 
 `emdash-plugin.jsonc` is worth reading alongside — the `capabilities`,
 `allowedHosts` and `storage` blocks are annotated with why each entry is there.
 
 ## Settings
 
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `staleAfterDays` | `30` | Days of inactivity before published content is stale |
-| `collections` | `all` | `all`, or a comma-separated list such as `posts,pages` |
-| `enabled` | `true` | When off, saves are not recorded |
+| Key              | Default | Meaning                                                |
+| ---------------- | ------- | ------------------------------------------------------ |
+| `staleAfterDays` | `30`    | Days of inactivity before published content is stale   |
+| `collections`    | `all`   | `all`, or a comma-separated list such as `posts,pages` |
+| `enabled`        | `true`  | When off, saves are not recorded                       |
 
 Editable from **Content Freshness** in the admin, or over the `settings/save` route.
 
 ## Routes
 
-| Route | Returns |
-| --- | --- |
-| `stale?limit=&cursor=` | Stale items, oldest first, each with `staleForDays` |
-| `settings` | Current settings, with defaults filled in |
-| `settings/save` | Persists settings; ignores absent or invalid values |
-| `admin` | Block Kit blocks — reserved name, called by the admin UI |
+| Route                  | Returns                                                  |
+| ---------------------- | -------------------------------------------------------- |
+| `stale?limit=&cursor=` | Stale items, oldest first, each with `staleForDays`      |
+| `settings`             | Current settings, with defaults filled in                |
+| `settings/save`        | Persists settings; ignores absent or invalid values      |
+| `admin`                | Block Kit blocks — reserved name, called by the admin UI |
 
 ## Working on it
 
