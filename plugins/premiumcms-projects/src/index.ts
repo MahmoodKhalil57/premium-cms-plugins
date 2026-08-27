@@ -78,6 +78,22 @@ const SETTINGS_SCHEMA: SettingsSchema = {
 		label: "Cloudflare API Token",
 		description: "A token with Workers, D1, R2, KV and Workers Routes permissions.",
 	},
+	emailAccountId: {
+		type: "string",
+		label: "Fallback email — Cloudflare Account ID",
+		description:
+			"Optional. A Cloudflare account with Email Sending onboarded, used as the fallback email provider for provisioned instances so magic-link login works out of the box.",
+	},
+	emailApiToken: {
+		type: "secret",
+		label: "Fallback email — Cloudflare API Token",
+		description: "A token with Email:Send on the account above.",
+	},
+	emailFrom: {
+		type: "email",
+		label: "Fallback email — Send from",
+		description: "e.g. cms@send.premium-cms.com (its domain must be onboarded for Email Sending).",
+	},
 };
 
 /**

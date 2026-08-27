@@ -22,9 +22,18 @@ export interface Settings {
 	cfAccountId: string;
 	cfApiToken: string;
 	/**
+	 * Fallback email provider for provisioned children (shown on the form).
+	 * A Cloudflare account with Email Sending onboarded for `emailFrom`'s
+	 * domain, and a token with Email:Send. Provisioned instances get these as
+	 * their cloudflare-email-byo settings so magic-link login works before the
+	 * owner sets up their own email. Optional — skipped when blank.
+	 */
+	emailAccountId: string;
+	emailApiToken: string;
+	emailFrom: string;
+	/**
 	 * Set up behind the scenes (not on the settings form) — the operator seeds
-	 * these on a platform instance; the site owner only enters the two CF
-	 * credentials above.
+	 * these on a platform instance; the site owner only enters credentials above.
 	 */
 	marketplaceUrl: string;
 	ownerEmail: string;
@@ -71,6 +80,9 @@ export async function readSettings(ctx: PluginContext): Promise<Settings> {
 		return {
 			cfAccountId: asString(map.cfAccountId).trim().toLowerCase(),
 			cfApiToken: asString(map.cfApiToken),
+			emailAccountId: asString(map.emailAccountId).trim().toLowerCase(),
+			emailApiToken: asString(map.emailApiToken),
+			emailFrom: asString(map.emailFrom).trim(),
 			marketplaceUrl: (asString(map.marketplaceUrl).trim() || DEFAULT_MARKETPLACE_URL).replace(
 				/\/$/,
 				"",
@@ -83,6 +95,9 @@ export async function readSettings(ctx: PluginContext): Promise<Settings> {
 		return {
 			cfAccountId: "",
 			cfApiToken: "",
+			emailAccountId: "",
+			emailApiToken: "",
+			emailFrom: "",
 			marketplaceUrl: DEFAULT_MARKETPLACE_URL,
 			ownerEmail: "",
 			deployKey: "",

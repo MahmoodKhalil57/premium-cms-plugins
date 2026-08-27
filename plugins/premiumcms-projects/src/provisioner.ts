@@ -303,9 +303,48 @@ export async function bootstrapOwner(
 	if (!insOpt.success)
 		throw new Error(`setup-complete option failed: ${JSON.stringify(insOpt.errors)}`);
 
+	await configureFallbackEmail(ctx, settings, state);
+
 	state.status = "live";
 	state.error = null;
 	return putState(ctx, state);
+}
+
+/**
+ * Seed the child's cloudflare-email-byo settings with the provider's fallback
+ * email credentials, so magic-link login works before the owner configures
+ * their own email. No-op when no fallback is set. Requires the child theme to
+ * bundle cloudflare-email-byo (its exclusive email:deliver provider is
+ * auto-selected when it is the only one). Options are stored as
+ * JSON.stringify(value), which json_quote(?) reproduces.
+ */
+async function configureFallbackEmail(
+	ctx: PluginContext,
+	settings: Settings,
+	state: ProjectState,
+): Promise<void> {
+	if (!settings.emailAccountId || !settings.emailApiToken || !settings.emailFrom) return;
+	if (!state.d1_id) return;
+	const creds = credsOf(settings);
+	const rows: Array<[string, string]> = [
+		["plugin:cloudflare-email-byo:settings:accountId", settings.emailAccountId],
+		["plugin:cloudflare-email-byo:settings:apiToken", settings.emailApiToken],
+		["plugin:cloudflare-email-byo:settings:fromAddress", settings.emailFrom],
+		["plugin:cloudflare-email-byo:settings:fromName", state.label || "PremiumCMS"],
+	];
+	for (const [name, value] of rows) {
+		const res = await d1Query(
+			ctx,
+			creds,
+			state.d1_id,
+			"INSERT INTO options (name,value) VALUES (?, json_quote(?)) ON CONFLICT(name) DO UPDATE SET value=json_quote(?)",
+			[name, value, value],
+		);
+		if (!res.success) {
+			ctx.log.warn(`[premiumcms-projects] fallback email option ${name} failed for ${state.id}`);
+		}
+	}
+	ctx.log.info(`[premiumcms-projects] configured fallback email for ${state.id}`);
 }
 
 /**
