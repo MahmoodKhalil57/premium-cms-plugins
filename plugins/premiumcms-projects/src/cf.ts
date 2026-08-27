@@ -91,6 +91,33 @@ export async function cfApi<T = unknown>(
  * Resolve a zone id by name. The zones endpoint is NOT under /accounts, so it
  * takes the bare `${CF_API_BASE}/zones` base URL.
  */
+/**
+ * Resolve the Cloudflare zone new instances are provisioned under, from the
+ * account's zones. Prefers a name (derived from the site URL) when it matches
+ * an account zone, else falls back to the account's first zone. Reliable
+ * regardless of whether ctx.site.url is populated in the current context.
+ */
+export async function resolveZone(
+	ctx: PluginContext,
+	creds: CfCreds,
+	preferred?: string,
+): Promise<{ name: string; id: string }> {
+	if (!creds.apiToken || !creds.accountId)
+		throw new Error("Cloudflare credentials not configured.");
+	const res = await http(ctx, `${CF_API_BASE}/zones?account.id=${creds.accountId}&per_page=50`, {
+		headers: { Authorization: `Bearer ${creds.apiToken}` },
+	});
+	const data = res.json<CfResult<Array<{ id: string; name: string }>>>();
+	const zones = data.success && data.result ? data.result : [];
+	if (zones.length === 0) {
+		throw new Error(
+			"no Cloudflare zones on this account (check the token's Zone:Read permission).",
+		);
+	}
+	const chosen = (preferred && zones.find((z) => z.name === preferred)) || zones[0];
+	return { name: chosen.name, id: chosen.id };
+}
+
 export async function cfZoneId(ctx: PluginContext, creds: CfCreds, zone: string): Promise<string> {
 	if (!creds.apiToken || !zone) throw new Error("Cloudflare credentials / zone not configured.");
 	const res = await http(

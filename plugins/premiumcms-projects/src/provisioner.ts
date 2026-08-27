@@ -14,7 +14,7 @@
  */
 
 import type { PluginContext } from "@premium-cms/emdash/plugin";
-import { cfApi, cfZoneId, d1Query, deployService } from "./cf.js";
+import { cfApi, cfZoneId, d1Query, deployService, resolveZone } from "./cf.js";
 import { credsOf, siteZone, type Settings } from "./settings.js";
 
 const NAME_RE = /^[a-z][a-z0-9-]{1,28}$/;
@@ -40,6 +40,8 @@ export interface ProjectState {
 	label: string;
 	theme: string;
 	hostname: string;
+	/** The Cloudflare zone the hostname sits under (resolved from the account). */
+	zone: string;
 	status: ProjectStatus;
 	error: string | null;
 	d1_id: string | null;
@@ -107,12 +109,14 @@ export async function seedState(
 ): Promise<ProjectState> {
 	const existing = await getState(ctx, input.id);
 	if (existing) return existing;
+	const zone = await resolveZone(ctx, credsOf(settings), siteZone(ctx));
 	const now = new Date().toISOString();
 	const state: ProjectState = {
 		id: input.id,
 		label: input.label.trim() || input.id,
 		theme: input.theme || "",
-		hostname: `${input.id}.${siteZone(ctx)}`,
+		hostname: `${input.id}.${zone.name}`,
+		zone: zone.name,
 		status: "creating",
 		error: null,
 		d1_id: null,
@@ -235,7 +239,11 @@ export async function attachDomain(
 	const state = await getState(ctx, id);
 	if (!state) throw new Error("unknown project");
 	const creds = credsOf(settings);
-	const zoneId = await cfZoneId(ctx, creds, siteZone(ctx));
+	const zoneId = await cfZoneId(
+		ctx,
+		creds,
+		state.zone || (await resolveZone(ctx, creds, siteZone(ctx))).name,
+	);
 	const res = await cfApi(ctx, creds, "PUT", "/workers/domains", {
 		zone_id: zoneId,
 		hostname: state.hostname,
