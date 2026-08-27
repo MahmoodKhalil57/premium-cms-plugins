@@ -41,6 +41,20 @@
         "@premium-cms/emdash": ">=0.35.0",
       },
     },
+    "plugins/premiumcms-projects": {
+      "name": "@premium-cms/plugin-premiumcms-projects",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@premium-cms/emdash": "^0.35.0",
+        "@premium-cms/plugin-cli": "^0.8.1",
+        "@premium-cms/plugin-types": "^0.3.0",
+        "typescript": "^6.0.3",
+        "vitest": "^4.1.5",
+      },
+      "peerDependencies": {
+        "@premium-cms/emdash": ">=0.35.0",
+      },
+    },
   },
   "packages": {
     "@astrojs/compiler-binding": ["@astrojs/compiler-binding@0.4.0", "", { "optionalDependencies": { "@astrojs/compiler-binding-darwin-arm64": "0.4.0", "@astrojs/compiler-binding-darwin-x64": "0.4.0", "@astrojs/compiler-binding-linux-arm64-gnu": "0.4.0", "@astrojs/compiler-binding-linux-arm64-musl": "0.4.0", "@astrojs/compiler-binding-linux-x64-gnu": "0.4.0", "@astrojs/compiler-binding-linux-x64-musl": "0.4.0", "@astrojs/compiler-binding-wasm32-wasi": "0.4.0", "@astrojs/compiler-binding-win32-arm64-msvc": "0.4.0", "@astrojs/compiler-binding-win32-x64-msvc": "0.4.0" } }, "sha512-x2RjDUuWfwLNtc3mjAdSRInwqh/rqbLar9cm/5FOMbHvmYZB7yfKewzSclAxWjIZsypJDXv1lhaP2WG+P8TK3g=="],
@@ -398,6 +412,8 @@
     "@premium-cms/plugin-cli": ["@premium-cms/plugin-cli@0.8.1", "", { "dependencies": { "@atcute/client": "^5.0.0", "@atcute/identity-resolver": "^2.0.0", "@atcute/lexicons": "^2.0.0", "@atcute/multibase": "^1.2.0", "@atcute/oauth-node-client": "^2.0.0", "@clack/prompts": "^1.4.0", "@oslojs/crypto": "^1.0.1", "@premium-cms/plugin-types": "0.3.0", "@premium-cms/registry-client": "0.3.4", "@premium-cms/registry-lexicons": "0.3.0", "chokidar": "^5.0.0", "citty": "^0.1.6", "consola": "^3.4.2", "jsonc-parser": "^3.3.1", "modern-tar": "^0.7.5", "picocolors": "^1.1.1", "tsdown": "0.20.3", "zod": "^4.4.1" }, "bin": { "emdash-plugin": "./dist/index.mjs" } }, "sha512-gQsOAio6gYSYrM0qK1tdVjylHMbtlcd7ouC2CkSBH0Yk+Qx+w+86WocJGsjvg4MNaexRjHFr1mTpXYcoNTPuHQ=="],
 
     "@premium-cms/plugin-cloudflare-email-byo": ["@premium-cms/plugin-cloudflare-email-byo@workspace:plugins/cloudflare-email-byo"],
+
+    "@premium-cms/plugin-premiumcms-projects": ["@premium-cms/plugin-premiumcms-projects@workspace:plugins/premiumcms-projects"],
 
     "@premium-cms/plugin-starter": ["@premium-cms/plugin-starter@workspace:plugins/premium-starter"],
 

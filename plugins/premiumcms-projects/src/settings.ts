@@ -88,55 +88,8 @@ export function validate(settings: Settings): { ok: true } | { ok: false; missin
 	return missing.length === 0 ? { ok: true } : { ok: false, missing };
 }
 
-/** Redact everything but the shape of a secret, for safe display. */
-export function redact(token: string): string {
-	if (!token) return "";
-	return token.length <= 8 ? "••••••••" : `••••••••${token.slice(-4)}`;
-}
-
-/**
- * Persist only the fields present and usable.
- *
- * Secrets get special treatment: Block Kit `secret_input` submits an empty
- * string when the field is left untouched, so writing it blindly would wipe a
- * working credential every time an unrelated field is edited. An empty
- * submission is ignored; clearing is the explicit value "clear".
- */
-export async function saveSettings(
-	ctx: PluginContext,
-	values: Record<string, unknown>,
-): Promise<string | undefined> {
-	const notes: string[] = [];
-
-	if (typeof values.cfAccountId === "string") {
-		await ctx.kv.set(`${KV_PREFIX}cfAccountId`, values.cfAccountId.trim().toLowerCase());
-	}
-	if (typeof values.zone === "string") {
-		await ctx.kv.set(`${KV_PREFIX}zone`, values.zone.trim());
-	}
-	if (typeof values.marketplaceUrl === "string") {
-		await ctx.kv.set(`${KV_PREFIX}marketplaceUrl`, values.marketplaceUrl.trim());
-	}
-	if (typeof values.ownerEmail === "string") {
-		await ctx.kv.set(`${KV_PREFIX}ownerEmail`, values.ownerEmail.trim());
-	}
-
-	for (const key of ["cfApiToken", "deployKey"] as const) {
-		if (typeof values[key] === "string") {
-			const secret = (values[key] as string).trim();
-			if (secret === "clear") {
-				await ctx.kv.set(`${KV_PREFIX}${key}`, "");
-				notes.push(`${label(key)} cleared.`);
-			} else if (secret) {
-				await ctx.kv.set(`${KV_PREFIX}${key}`, secret);
-				notes.push(`${label(key)} updated.`);
-			}
-		}
-	}
-
-	return notes.length ? notes.join(" ") : "Settings saved.";
-}
-
-function label(key: "cfApiToken" | "deployKey"): string {
-	return key === "cfApiToken" ? "API token" : "Deploy key";
-}
+// Note: this plugin is a TRUSTED, in-process plugin. Settings are written by
+// the admin's declarative settings form (declared via `admin.settingsSchema`
+// in index.ts), which persists each field under the `settings:` kv prefix —
+// the same prefix `readSettings` reads. There is therefore no hand-rolled
+// `saveSettings`/`redact` here anymore; the framework owns the write side.
