@@ -12,20 +12,40 @@ import type { PluginContext } from "@premium-cms/emdash/plugin";
 
 export const KV_PREFIX = "settings:";
 
-export const DEFAULT_ZONE = "premium-cms.com";
 export const DEFAULT_MARKETPLACE_URL = "https://marketplace.premium-cms.com";
 
 /** Cloudflare account IDs are 32 lowercase hex characters. */
 const ACCOUNT_ID_RE = /^[0-9a-f]{32}$/;
 
 export interface Settings {
+	/** User-configured, shown on the settings form. */
 	cfAccountId: string;
-	zone: string;
+	cfApiToken: string;
+	/**
+	 * Set up behind the scenes (not on the settings form) — the operator seeds
+	 * these on a platform instance; the site owner only enters the two CF
+	 * credentials above.
+	 */
 	marketplaceUrl: string;
 	ownerEmail: string;
-	/** Secrets — present only in the internal read, never returned by a route. */
-	cfApiToken: string;
 	deployKey: string;
+}
+
+/**
+ * The Cloudflare zone new instances are provisioned under, derived from the
+ * site's canonical URL (Settings → General → Site URL) rather than a plugin
+ * field: the registrable domain (last two labels) of the site hostname.
+ */
+export function siteZone(ctx: PluginContext): string {
+	const url = (ctx.site?.url ?? "").trim();
+	if (!url) return "";
+	try {
+		const host = new URL(url).hostname;
+		const labels = host.split(".").filter(Boolean);
+		return labels.length >= 2 ? labels.slice(-2).join(".") : host;
+	} catch {
+		return "";
+	}
 }
 
 /** Credential pair passed to the Cloudflare REST client. */
@@ -50,23 +70,21 @@ export async function readSettings(ctx: PluginContext): Promise<Settings> {
 		for (const entry of entries) map[entry.key.replace(KV_PREFIX, "")] = entry.value;
 		return {
 			cfAccountId: asString(map.cfAccountId).trim().toLowerCase(),
-			zone: asString(map.zone).trim() || DEFAULT_ZONE,
+			cfApiToken: asString(map.cfApiToken),
 			marketplaceUrl: (asString(map.marketplaceUrl).trim() || DEFAULT_MARKETPLACE_URL).replace(
 				/\/$/,
 				"",
 			),
 			ownerEmail: asString(map.ownerEmail).trim(),
-			cfApiToken: asString(map.cfApiToken),
 			deployKey: asString(map.deployKey),
 		};
 	} catch (error) {
 		ctx.log.error("Failed to read settings", error);
 		return {
 			cfAccountId: "",
-			zone: DEFAULT_ZONE,
+			cfApiToken: "",
 			marketplaceUrl: DEFAULT_MARKETPLACE_URL,
 			ownerEmail: "",
-			cfApiToken: "",
 			deployKey: "",
 		};
 	}
@@ -84,7 +102,6 @@ export function validate(settings: Settings): { ok: true } | { ok: false; missin
 		missing.push("a valid account ID (32 hex characters)");
 	if (!settings.cfApiToken) missing.push("Cloudflare API token");
 	if (!settings.deployKey) missing.push("marketplace deploy key");
-	if (!settings.zone) missing.push("platform zone");
 	return missing.length === 0 ? { ok: true } : { ok: false, missing };
 }
 

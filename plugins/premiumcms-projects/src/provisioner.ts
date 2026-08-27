@@ -15,7 +15,7 @@
 
 import type { PluginContext } from "@premium-cms/emdash/plugin";
 import { cfApi, cfZoneId, d1Query, deployService } from "./cf.js";
-import { credsOf, type Settings } from "./settings.js";
+import { credsOf, siteZone, type Settings } from "./settings.js";
 
 const NAME_RE = /^[a-z][a-z0-9-]{1,28}$/;
 const RESERVED = new Set([
@@ -112,7 +112,7 @@ export async function seedState(
 		id: input.id,
 		label: input.label.trim() || input.id,
 		theme: input.theme || "",
-		hostname: `${input.id}.${settings.zone}`,
+		hostname: `${input.id}.${siteZone(ctx)}`,
 		status: "creating",
 		error: null,
 		d1_id: null,
@@ -235,7 +235,7 @@ export async function attachDomain(
 	const state = await getState(ctx, id);
 	if (!state) throw new Error("unknown project");
 	const creds = credsOf(settings);
-	const zoneId = await cfZoneId(ctx, creds, settings.zone);
+	const zoneId = await cfZoneId(ctx, creds, siteZone(ctx));
 	const res = await cfApi(ctx, creds, "PUT", "/workers/domains", {
 		zone_id: zoneId,
 		hostname: state.hostname,

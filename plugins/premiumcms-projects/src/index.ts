@@ -63,21 +63,21 @@ const ALLOWED_HOSTS = ["api.cloudflare.com", "marketplace.premium-cms.com", "*.p
  * `readSettings` (settings.ts) reads them. The field keys MUST match what
  * `readSettings` looks up.
  */
+// Only the two Cloudflare credentials are the site owner's to enter. The zone
+// is derived from the site's canonical URL (Settings → General), and the deploy
+// key / marketplace URL / owner email are set up behind the scenes on a
+// platform instance — so they are deliberately not on this form.
 const SETTINGS_SCHEMA: SettingsSchema = {
-	cfAccountId: { type: "string", label: "Cloudflare Account ID", description: "32 hex chars" },
-	cfApiToken: { type: "secret", label: "Cloudflare API Token" },
-	zone: { type: "string", label: "Zone", default: "premium-cms.com" },
-	deployKey: {
-		type: "secret",
-		label: "Deploy Key",
-		description: "The marketplace deploy service X-Deploy-Key",
-	},
-	marketplaceUrl: {
+	cfAccountId: {
 		type: "string",
-		label: "Marketplace URL",
-		default: "https://marketplace.premium-cms.com",
+		label: "Cloudflare Account ID",
+		description: "32 hex characters, from your Cloudflare dashboard.",
 	},
-	ownerEmail: { type: "email", label: "Default Owner Email" },
+	cfApiToken: {
+		type: "secret",
+		label: "Cloudflare API Token",
+		description: "A token with Workers, D1, R2, KV and Workers Routes permissions.",
+	},
 };
 
 /**
