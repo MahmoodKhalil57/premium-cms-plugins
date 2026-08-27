@@ -69,7 +69,7 @@ function makeTestContext(rows: Row[] = [], settings: Record<string, unknown> = {
 					.map(([key, value]) => ({ key, value })),
 		},
 		log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
-	} as unknown as import("emdash").PluginContext;
+	} as unknown as import("@premium-cms/emdash").PluginContext;
 
 	return { ctx, store, kv };
 }
@@ -88,7 +88,7 @@ function published(collection: string, title: string, ageDays: number) {
 	};
 }
 
-async function callAdmin(ctx: import("emdash").PluginContext, input: unknown) {
+async function callAdmin(ctx: import("@premium-cms/emdash").PluginContext, input: unknown) {
 	const route = plugin.routes?.admin;
 	if (!route || typeof route !== "object" || !("handler" in route)) {
 		throw new Error("admin route not found");
@@ -97,7 +97,7 @@ async function callAdmin(ctx: import("emdash").PluginContext, input: unknown) {
 }
 
 async function callSave(
-	ctx: import("emdash").PluginContext,
+	ctx: import("@premium-cms/emdash").PluginContext,
 	event: Record<string, unknown>,
 ): Promise<void> {
 	const hook = plugin.hooks?.["content:afterSave"];
@@ -167,7 +167,7 @@ describe("content:afterDelete", () => {
 });
 
 describe("stale route", () => {
-	let ctx: import("emdash").PluginContext;
+	let ctx: import("@premium-cms/emdash").PluginContext;
 
 	beforeEach(() => {
 		ctx = makeTestContext([

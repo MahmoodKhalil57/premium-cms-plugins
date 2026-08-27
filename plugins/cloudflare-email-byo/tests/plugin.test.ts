@@ -53,7 +53,7 @@ function makeTestContext(
 			error: (m: string) => logs.push({ level: "error", message: m }),
 			debug: () => {},
 		},
-	} as unknown as import("emdash").PluginContext;
+	} as unknown as import("@premium-cms/emdash").PluginContext;
 
 	return { ctx, kv, captured, logs };
 }
@@ -66,7 +66,7 @@ const GOOD = {
 };
 
 async function callDeliver(
-	ctx: import("emdash").PluginContext,
+	ctx: import("@premium-cms/emdash").PluginContext,
 	message?: Partial<{
 		to: string;
 		subject: string;
@@ -90,7 +90,7 @@ async function callDeliver(
 	);
 }
 
-async function callAdmin(ctx: import("emdash").PluginContext, input: unknown) {
+async function callAdmin(ctx: import("@premium-cms/emdash").PluginContext, input: unknown) {
 	const route = plugin.routes?.admin;
 	if (!route || typeof route !== "object" || !("handler" in route)) throw new Error("no route");
 	return (await route.handler({ input } as never, ctx)) as {
@@ -98,7 +98,11 @@ async function callAdmin(ctx: import("emdash").PluginContext, input: unknown) {
 	};
 }
 
-async function callRoute(ctx: import("emdash").PluginContext, name: string, input: unknown = {}) {
+async function callRoute(
+	ctx: import("@premium-cms/emdash").PluginContext,
+	name: string,
+	input: unknown = {},
+) {
 	const route = plugin.routes?.[name];
 	if (!route || typeof route !== "object" || !("handler" in route)) throw new Error("no route");
 	return route.handler({ input } as never, ctx);

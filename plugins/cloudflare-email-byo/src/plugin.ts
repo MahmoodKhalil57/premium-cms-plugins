@@ -22,7 +22,7 @@
  *      settings page, then send a test.
  */
 
-import type { PluginContext, SandboxedPlugin } from "emdash/plugin";
+import type { PluginContext, SandboxedPlugin } from "@premium-cms/emdash/plugin";
 
 // ── Types ────────────────────────────────────────────────────────────────
 

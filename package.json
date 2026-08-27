@@ -11,14 +11,14 @@
 		"build": "npm run build --workspaces --if-present",
 		"test": "npm run test --workspaces --if-present",
 		"typecheck": "npm run typecheck --workspaces --if-present",
-		"validate": "for d in plugins/*/; do npx @emdash-cms/plugin-cli validate \"$d\"; done",
+		"validate": "for d in plugins/*/; do npx @premium-cms/plugin-cli validate \"$d\"; done",
 		"new": "bin/new-plugin.sh",
 		"prepare": "husky",
 		"format": "prettier --write .",
 		"format:check": "prettier --check ."
 	},
 	"devDependencies": {
-		"@emdash-cms/plugin-cli": "^0.8.1",
+		"@premium-cms/plugin-cli": "^0.8.1",
 		"husky": "^9.1.7",
 		"lint-staged": "^17.3.0",
 		"prettier": "^3.9.6",

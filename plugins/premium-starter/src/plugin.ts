@@ -28,7 +28,7 @@
  * while emitting declarations that are portable. Prefer this form here.
  */
 
-import type { PluginContext, SandboxedPlugin } from "emdash/plugin";
+import type { PluginContext, SandboxedPlugin } from "@premium-cms/emdash/plugin";
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -349,7 +349,7 @@ async function saveSettings(ctx: PluginContext, values: Record<string, unknown>)
 }
 
 // ── Block Kit builders ───────────────────────────────────────────────────
-// Plain objects — no @emdash-cms/blocks import needed, which keeps the
+// Plain objects — no @premium-cms/blocks import needed, which keeps the
 // sandbox bundle small and dependency-free.
 
 async function buildFreshnessPage(ctx: PluginContext, cursor?: string) {
