@@ -32,6 +32,16 @@ export interface Settings {
 	emailApiToken: string;
 	emailFrom: string;
 	/**
+	 * Cost-plus billing for provisioned children (shown on the form).
+	 * `stripeSecretKey` / `stripeWebhookSecret` power self-serve credit top-ups;
+	 * `creditsMarkup` multiplies the underlying Cloudflare cost; `creditsEnforce`
+	 * turns on metering + suspend-when-empty on children.
+	 */
+	stripeSecretKey: string;
+	stripeWebhookSecret: string;
+	creditsMarkup: number;
+	creditsEnforce: boolean;
+	/**
 	 * Set up behind the scenes (not on the settings form) — the operator seeds
 	 * these on a platform instance; the site owner only enters credentials above.
 	 */
@@ -71,6 +81,17 @@ function asString(value: unknown, fallback = ""): string {
 	return typeof value === "string" ? value : fallback;
 }
 
+function asNumber(value: unknown, fallback: number): number {
+	const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+	return Number.isFinite(n) ? n : fallback;
+}
+
+function asBoolean(value: unknown, fallback: boolean): boolean {
+	if (typeof value === "boolean") return value;
+	if (typeof value === "string") return value === "true" || value === "1";
+	return fallback;
+}
+
 /** Read settings from kv. Never throws — a failed read degrades to blanks/defaults. */
 export async function readSettings(ctx: PluginContext): Promise<Settings> {
 	try {
@@ -83,6 +104,10 @@ export async function readSettings(ctx: PluginContext): Promise<Settings> {
 			emailAccountId: asString(map.emailAccountId).trim().toLowerCase(),
 			emailApiToken: asString(map.emailApiToken),
 			emailFrom: asString(map.emailFrom).trim(),
+			stripeSecretKey: asString(map.stripeSecretKey),
+			stripeWebhookSecret: asString(map.stripeWebhookSecret),
+			creditsMarkup: asNumber(map.creditsMarkup, 2),
+			creditsEnforce: asBoolean(map.creditsEnforce, false),
 			marketplaceUrl: (asString(map.marketplaceUrl).trim() || DEFAULT_MARKETPLACE_URL).replace(
 				/\/$/,
 				"",
@@ -98,6 +123,10 @@ export async function readSettings(ctx: PluginContext): Promise<Settings> {
 			emailAccountId: "",
 			emailApiToken: "",
 			emailFrom: "",
+			stripeSecretKey: "",
+			stripeWebhookSecret: "",
+			creditsMarkup: 2,
+			creditsEnforce: false,
 			marketplaceUrl: DEFAULT_MARKETPLACE_URL,
 			ownerEmail: "",
 			deployKey: "",

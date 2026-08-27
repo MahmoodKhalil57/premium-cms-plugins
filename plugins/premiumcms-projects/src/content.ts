@@ -90,3 +90,25 @@ export async function mirrorState(ctx: PluginContext, state: ProjectState): Prom
 		ctx.log.warn(`[premiumcms-projects] could not mirror status for ${state.id}`, err);
 	}
 }
+
+/**
+ * Reflect a child's current credit balance (micro-dollars) into its Projects
+ * row `credit_balance` field, in whole dollars, so operators see live balances
+ * in the content list. No-op when the row or write access is unavailable.
+ */
+export async function updateCreditBalance(
+	ctx: PluginContext,
+	projectId: string,
+	balanceMicros: number,
+): Promise<void> {
+	if (!ctx.content?.update) return;
+	const rowId = await findRowByProjectId(ctx, projectId);
+	if (!rowId) return;
+	try {
+		await ctx.content.update(COLLECTION, rowId, {
+			credit_balance: Math.round(balanceMicros) / 1_000_000,
+		});
+	} catch (err) {
+		ctx.log.warn(`[premiumcms-projects] could not update credit_balance for ${projectId}`, err);
+	}
+}

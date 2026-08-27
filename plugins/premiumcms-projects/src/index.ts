@@ -40,7 +40,14 @@ type SettingsSchema = NonNullable<PluginAdminConfig["settingsSchema"]>;
 
 import { COLLECTION, fieldsOf, listUnclaimed, mirrorState } from "./content.js";
 import { advance, getState, listStates, projectIdFromLabel, seedState } from "./provisioner.js";
-import { readSettings, validate } from "./settings.js";
+import { credsOf, readSettings, validate } from "./settings.js";
+import {
+	childBalanceMicros,
+	grantCredits,
+	pushCreditsSettings,
+	syncExternalUsage,
+} from "./credits.js";
+import { checkoutSessionIdFromEvent, createCheckout, retrieveCheckoutSession } from "./stripe.js";
 
 const STEP_TIMEOUT_MS = 60_000; // one Cloudflare-round-trip budget per step
 
@@ -54,7 +61,12 @@ const str = (v: unknown): string => (typeof v === "string" ? v : "");
 // platform zone. `content:read`/`content:write` let the plugin read the
 // Projects collection rows and mirror provisioning status back into them.
 const CAPABILITIES = ["network:request", "content:read", "content:write"] as const;
-const ALLOWED_HOSTS = ["api.cloudflare.com", "marketplace.premium-cms.com", "*.premium-cms.com"];
+const ALLOWED_HOSTS = [
+	"api.cloudflare.com",
+	"api.stripe.com",
+	"marketplace.premium-cms.com",
+	"*.premium-cms.com",
+];
 
 /**
  * Declarative settings schema. The admin auto-generates the settings form at
@@ -93,6 +105,31 @@ const SETTINGS_SCHEMA: SettingsSchema = {
 		type: "email",
 		label: "Fallback email — Send from",
 		description: "e.g. cms@send.premium-cms.com (its domain must be onboarded for Email Sending).",
+	},
+	stripeSecretKey: {
+		type: "secret",
+		label: "Stripe secret key",
+		description:
+			"Optional. Lets child projects buy hosting credits with a card. Starts sk_live_… or sk_test_…",
+	},
+	stripeWebhookSecret: {
+		type: "secret",
+		label: "Stripe webhook signing secret",
+		description:
+			"The whsec_… secret for a webhook at …/api/plugins/premiumcms-projects/billingWebhook (checkout.session.completed).",
+	},
+	creditsMarkup: {
+		type: "number",
+		label: "Cost-plus markup",
+		description:
+			"Multiplier on the underlying Cloudflare cost billed to each child (e.g. 2 = 100% margin).",
+		default: 2,
+	},
+	creditsEnforce: {
+		type: "boolean",
+		label: "Meter + enforce credits",
+		description: "When on, children are metered and suspended once their credits run out.",
+		default: false,
 	},
 };
 
@@ -150,6 +187,46 @@ async function runProvisionTick(
 	return { claimed, advanced };
 }
 
+/**
+ * One billing pass: for each live project, refresh its Cloudflare usage into
+ * its ledger (throttled per-project) and push the current price book +
+ * enforcement flag + top-up target. Cheap on non-enforced setups: a live
+ * project is still metered so its owner sees a real bill, but nothing is
+ * blocked unless `creditsEnforce` is on.
+ */
+const BILLING_SYNC_INTERVAL_MS = 30 * 60_000; // at most twice an hour per project
+
+async function runBillingTick(ctx: PluginContext): Promise<{ synced: number }> {
+	const settings = await readSettings(ctx);
+	if (!validate(settings).ok) return { synced: 0 };
+
+	// One project per tick: a scheduled invocation has a bounded budget and the
+	// Cloudflare analytics queries are slow. Throttled projects are skipped with
+	// no work, so most ticks are free; due projects are metered one per minute.
+	// No content writes here — the Projects-row `credit_balance` is refreshed by
+	// the on-demand operator top-up, not the tick, to keep the tick light and
+	// free of afterSave re-entrancy.
+	let synced = 0;
+	for (const s of await listStates(ctx)) {
+		if (s.status !== "live" || !s.d1_id) continue;
+		const lastRaw = await ctx.kv.get<string>(`billing:synced:${s.id}`);
+		const last = lastRaw ? Date.parse(lastRaw) : 0;
+		if (Number.isFinite(last) && Date.now() - last < BILLING_SYNC_INTERVAL_MS) continue;
+
+		try {
+			await pushCreditsSettings(ctx, settings, s);
+			const res = await syncExternalUsage(ctx, settings, s);
+			await ctx.kv.set(`billing:synced:${s.id}`, new Date().toISOString());
+			synced += 1;
+			if (res.detail) ctx.log.warn(`[premiumcms-projects] usage sync ${s.id}: ${res.detail}`);
+		} catch (err) {
+			ctx.log.error(`[premiumcms-projects] billing sync for ${s.id} failed`, err);
+		}
+		break; // one project per tick — bound the invocation's work
+	}
+	return { synced };
+}
+
 // ─── Plugin Descriptor (for a theme's `plugins: [...]` config) ───
 
 /**
@@ -199,6 +276,45 @@ export function createPlugin(): ResolvedPlugin {
 					if (!ctx.content?.update) return;
 
 					const fields = fieldsOf(event.content);
+
+					// ── Operator credit top-up (from the Projects content editor) ──
+					// An admin sets "Add credits ($)" on a provisioned row and saves; we
+					// grant that amount into the child's ledger, clear the input and
+					// refresh the displayed balance. Runs for CLAIMED rows (which have a
+					// project_id), so it sits before the claim guard below.
+					const addCredits = Number(fields.add_credits);
+					const claimedId = str(fields.project_id);
+					if (claimedId && Number.isFinite(addCredits) && addCredits > 0) {
+						const topupSettings = await readSettings(ctx);
+						const state = await getState(ctx, claimedId);
+						const rowId = str((event.content as Record<string, unknown>).id);
+						if (state?.d1_id && validate(topupSettings).ok) {
+							const micros = Math.round(addCredits * 1_000_000);
+							try {
+								await grantCredits(
+									ctx,
+									topupSettings,
+									state,
+									micros,
+									`operator:${claimedId}:${Date.now()}`,
+									"Operator credit (parent admin)",
+								);
+								const balance = await childBalanceMicros(ctx, credsOf(topupSettings), state.d1_id);
+								// Clear the action input + reflect the new balance. This
+								// re-save carries add_credits=null, so it does not loop.
+								if (rowId) {
+									await ctx.content.update(COLLECTION, rowId, {
+										add_credits: null,
+										credit_balance: Math.round(balance) / 1_000_000,
+									});
+								}
+							} catch (err) {
+								ctx.log.error(`[premiumcms-projects] operator top-up for ${claimedId} failed`, err);
+							}
+						}
+						return;
+					}
+
 					if (str(fields.project_id)) return; // already claimed → cron drives it forward
 
 					const label = str(fields.label);
@@ -254,7 +370,109 @@ export function createPlugin(): ResolvedPlugin {
 			 * budget — which afterSave (inside the save request) does not.
 			 */
 			tick: {
-				handler: async (ctx) => ({ success: true, ...(await runProvisionTick(ctx)) }),
+				handler: async (ctx) => {
+					const prov = await runProvisionTick(ctx);
+					// Metering runs on the same per-minute tick; it self-throttles
+					// the (heavier) Cloudflare analytics sync per project.
+					const billing = await runBillingTick(ctx);
+					return { success: true, ...prov, ...billing };
+				},
+			},
+
+			/**
+			 * Public credit-checkout endpoint. A child instance's "add credits"
+			 * button proxies here with its project id + amount; we create a Stripe
+			 * hosted Checkout Session and return its URL. Public because the caller
+			 * is an unauthenticated child Worker — the project id must resolve to a
+			 * real provisioned project, and payment itself is authenticated by
+			 * Stripe. No credits are granted here; that happens on the webhook.
+			 */
+			billingCheckout: {
+				public: true,
+				handler: async (ctx) => {
+					const settings = await readSettings(ctx);
+					if (!settings.stripeSecretKey) {
+						return { success: false, error: "Card top-ups are not enabled for this host." };
+					}
+					// The runtime already parsed the request body and exposes it as
+					// ctx.input (ctx.request.json() would throw).
+					const body = (ctx.input ?? {}) as {
+						projectId?: unknown;
+						amount?: unknown;
+						returnUrl?: unknown;
+					};
+					const projectId = typeof body.projectId === "string" ? body.projectId : "";
+					const amount = Number(body.amount);
+					const returnUrl =
+						typeof body.returnUrl === "string" && body.returnUrl
+							? body.returnUrl
+							: `https://${projectId}`;
+					if (!projectId || !Number.isFinite(amount) || amount <= 0) {
+						return { success: false, error: "projectId and a positive amount are required." };
+					}
+					const state = await getState(ctx, projectId);
+					if (!state) return { success: false, error: "Unknown project." };
+					try {
+						const { url } = await createCheckout(ctx, settings, {
+							projectId,
+							email: state.owner_email,
+							title: state.label,
+							amountCents: Math.round(amount * 100),
+							returnUrl,
+						});
+						return { success: true, checkoutUrl: url };
+					} catch (err) {
+						ctx.log.error("[premiumcms-projects] checkout failed", err);
+						return {
+							success: false,
+							error: err instanceof Error ? err.message : "Checkout failed.",
+						};
+					}
+				},
+			},
+
+			/**
+			 * Public Stripe webhook. Verifies the signature against the configured
+			 * signing secret, then grants the purchased credits into the paying
+			 * child's ledger. Idempotent: the Stripe session id is the ledger ref,
+			 * so a redelivered event does not double-credit.
+			 */
+			billingWebhook: {
+				public: true,
+				handler: async (ctx) => {
+					const settings = await readSettings(ctx);
+					if (!settings.stripeSecretKey) {
+						return { success: false, error: "Stripe not configured." };
+					}
+					// The runtime consumed the body into ctx.input, so we cannot HMAC
+					// the raw bytes. Instead we re-fetch the session from Stripe with
+					// our secret key: that both authenticates the event and confirms
+					// it was paid. Idempotent via the ledger ref (`stripe:<session>`).
+					const sessionId = checkoutSessionIdFromEvent(ctx.input);
+					if (!sessionId) return { success: true, ignored: true };
+					try {
+						const session = await retrieveCheckoutSession(ctx, settings, sessionId);
+						if (session.paymentStatus !== "paid") return { success: true, ignored: true };
+						if (!session.projectId || session.creditsMicros <= 0) {
+							return { success: false, error: "Session is missing project/credits metadata." };
+						}
+						const state = await getState(ctx, session.projectId);
+						if (!state) return { success: false, error: "Unknown project." };
+						await grantCredits(
+							ctx,
+							settings,
+							state,
+							session.creditsMicros,
+							`stripe:${session.id}`,
+							"Stripe top-up",
+							{ sessionId: session.id },
+						);
+						return { success: true };
+					} catch (err) {
+						ctx.log.error("[premiumcms-projects] webhook grant failed", err);
+						return { success: false, error: "Failed to process payment." };
+					}
+				},
 			},
 
 			/** Provisioned projects (kv registry), for a custom admin screen. */
