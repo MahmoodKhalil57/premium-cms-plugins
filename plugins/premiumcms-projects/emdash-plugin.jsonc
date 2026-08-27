@@ -1,0 +1,32 @@
+{
+	"$schema": "../../node_modules/@emdash-cms/plugin-cli/schemas/emdash-plugin.schema.json",
+
+	"slug": "premiumcms-projects",
+	"name": "Projects (provider)",
+	// See plugins/premium-starter — must resolve for real before `publish`.
+	"publisher": "plugins.premium-cms.com",
+
+	"license": "UNLICENSED",
+	"author": { "name": "PremiumCMS" },
+	"security": {
+		"url": "https://github.com/MahmoodKhalil57/premium-cms-plugins/security/advisories/new",
+	},
+	"description": "Provision fully isolated CMS instances (own Worker, D1, KV, R2 and domain) on Cloudflare from a Projects collection, using the provider's credentials entered in the admin.",
+	"keywords": ["premiumcms", "provisioning", "cloudflare", "fleet", "multi-tenant"],
+
+	// ── Trust contract ────────────────────────────────────────────────
+	// `network:request` (not `network:request:unrestricted`) pins ctx.http
+	// to `allowedHosts`: the Cloudflare API token and the marketplace deploy
+	// key are the most sensitive values here, so egress is limited to the
+	// Cloudflare API, the marketplace deploy service, and provisioned child
+	// instances under the platform zone. `content:read`/`content:write` let
+	// the plugin read the Projects collection rows and mirror provisioning
+	// status back into them.
+	"capabilities": ["network:request", "content:read", "content:write"],
+	"allowedHosts": ["api.cloudflare.com", "marketplace.premium-cms.com", "*.premium-cms.com"],
+	"storage": {},
+
+	"admin": {
+		"pages": [{ "path": "/settings", "label": "Projects", "icon": "browsers" }],
+	},
+}
