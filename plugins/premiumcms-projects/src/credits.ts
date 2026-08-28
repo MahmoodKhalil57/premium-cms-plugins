@@ -193,6 +193,10 @@ export async function pushCreditsSettings(
 			`${parentOrigin}/_emdash/api/plugins/premiumcms-projects/customDomain`,
 		],
 		["custom_domain:default_url", defaultUrl],
+		// The child's own origin, as the runtime sees it (plugin ctx.site.url,
+		// outbound links, passkey rpId). The setup wizard would write this; a
+		// provisioned instance never runs it.
+		["emdash:site_url", defaultUrl],
 	]);
 }
 

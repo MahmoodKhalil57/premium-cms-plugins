@@ -45,7 +45,12 @@ export async function applyCanonicalUrl(
 	const rn = resourceName(project);
 	const d1Id = await findD1IdByName(ctx, creds, `${rn}-db`);
 	if (d1Id) {
-		const rows: Array<[string, string]> = [["site:url", url]];
+		// `site:url` is the admin's Site URL; `emdash:site_url` is what the
+		// runtime itself uses (plugin ctx.site.url, outbound links, passkey rpId).
+		const rows: Array<[string, string]> = [
+			["site:url", url],
+			["emdash:site_url", url],
+		];
 		if (defaultUrl)
 			rows.push(["custom_domain:default_url", defaultUrl], ["frontend:pages_url", defaultUrl]);
 		for (const [name, value] of rows) {
