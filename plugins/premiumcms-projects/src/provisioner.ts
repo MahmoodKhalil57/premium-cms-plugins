@@ -280,7 +280,7 @@ export async function provisionAll(
 	// 4. seed the child's credits: price book / markup / enforcement / project
 	//    id / top-up target, then the initial balance.
 	if (!p.d1_id) throw new Error("d1 not created");
-	await pushCreditsSettings(ctx, settings, p.d1_id, id);
+	await pushCreditsSettings(ctx, settings, p.d1_id, id, `https://${p.hostname}`);
 	await seedInitialCredits(ctx, settings, p.d1_id, id, Number(row.data.starting_credits) || 0);
 
 	// 5. bootstrap the owner admin into the child instance.

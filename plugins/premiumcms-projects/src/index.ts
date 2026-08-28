@@ -56,7 +56,24 @@ import {
 	setSecret,
 	whoami,
 } from "./github.js";
-import { d1Query, deployService, findD1IdByName, findKvIdByName, resolveZone } from "./cf.js";
+import {
+	cfZoneId,
+	d1Query,
+	deployService,
+	findD1IdByName,
+	findKvIdByName,
+	resolveZone,
+} from "./cf.js";
+import {
+	createCustomHostname,
+	deleteCustomHostname,
+	findCustomHostname,
+	isActive,
+	mapDomain,
+	normalizeDomain,
+	recordsFor,
+	unmapDomain,
+} from "./domains.js";
 
 const STEP_TIMEOUT_MS = 60_000; // one Cloudflare-round-trip budget per step
 
@@ -331,6 +348,45 @@ async function enableFrontend(
 	await ctx.kv.set(`github:owner:${project}`, owner);
 	await ctx.kv.set(`github:repo:${project}`, repo);
 	return pagesUrl;
+}
+
+/**
+ * Make `url` an instance's canonical origin: write its `site:url` option and
+ * rebuild its static frontend with the new SITE_URL (so the build's `base`/links
+ * and its snapshot's absolute media URLs use the custom domain). The rebuild is
+ * best-effort — it needs the owner's stored GitHub token; without it the site
+ * still serves at the domain through the proxy, just with links pointing at the
+ * previous origin until the next frontend build.
+ */
+async function applyCanonicalUrl(
+	ctx: PluginContext,
+	settings: Settings,
+	project: string,
+	url: string,
+): Promise<void> {
+	const creds = credsOf(settings);
+	const rn = resourceName(project);
+	const d1Id = await findD1IdByName(ctx, creds, `${rn}-db`);
+	if (d1Id) {
+		await d1Query(
+			ctx,
+			creds,
+			d1Id,
+			"INSERT INTO options (name,value) VALUES ('site:url', ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value",
+			[JSON.stringify(url)],
+		);
+	}
+	const token = await ctx.kv.get<string>(`github:token:${project}`);
+	const owner = await ctx.kv.get<string>(`github:owner:${project}`);
+	const repo = await ctx.kv.get<string>(`github:repo:${project}`);
+	if (token && owner && repo) {
+		try {
+			await setSecret(ctx, token, owner, repo, "SITE_URL", url);
+			await dispatchRebuild(ctx, token, owner, repo);
+		} catch (err) {
+			ctx.log.warn(`[premiumcms-projects] frontend rebuild for ${project} failed`, err);
+		}
+	}
 }
 
 // ─── Plugin Descriptor (for a theme's `plugins: [...]` config) ───
@@ -645,6 +701,74 @@ export function createPlugin(): ResolvedPlugin {
 						ctx.log.error(`[premiumcms-projects] enableFrontend for ${project} failed`, err);
 						return { __redirect: back("error") };
 					}
+				},
+			},
+
+			/**
+			 * Custom-domain setup/check for a provisioned instance (Cloudflare for
+			 * SaaS). Called server-side by a child's core Settings → General route.
+			 * Public because the caller is the instance backend, not an admin
+			 * session; the project id must resolve to a real provisioned project.
+			 * action=check ensures the custom hostname exists + maps it in the
+			 * router KV + returns the records to add and the live status;
+			 * action=reset removes the hostname + mapping.
+			 */
+			customDomain: {
+				public: true,
+				handler: async (ctx) => {
+					const settings = await readSettings(ctx);
+					if (!validate(settings).ok) {
+						return { success: false, error: "Custom domains are not configured on this platform." };
+					}
+					const body = (ctx.input ?? {}) as {
+						project?: unknown;
+						domain?: unknown;
+						action?: unknown;
+					};
+					const project = str(body.project);
+					if (!isUlid(project)) return { success: false, error: "A valid project is required." };
+					const creds = credsOf(settings);
+					const rn = resourceName(project);
+					const zone = (await resolveZone(ctx, creds, siteZone(ctx))).name;
+					const zoneId = await cfZoneId(ctx, creds, zone);
+					const kvId = settings.customDomainsKvId;
+					const backend = `${rn}.${zone}`;
+					const domain = normalizeDomain(str(body.domain));
+					const action = str(body.action) || "check";
+
+					if (action === "reset") {
+						if (domain) {
+							const ch = await findCustomHostname(ctx, creds, zoneId, domain);
+							if (ch) await deleteCustomHostname(ctx, creds, zoneId, ch.id);
+							if (kvId) await unmapDomain(ctx, creds, kvId, domain);
+						}
+						await applyCanonicalUrl(ctx, settings, project, `https://${backend}`);
+						return { success: true, reset: true, defaultUrl: `https://${backend}` };
+					}
+
+					if (!domain) return { success: false, error: "A domain is required." };
+					if (domain === zone || domain.endsWith(`.${zone}`)) {
+						return {
+							success: false,
+							error: `${domain} is a platform domain and can't be added as a custom domain.`,
+						};
+					}
+					let ch = await findCustomHostname(ctx, creds, zoneId, domain);
+					if (!ch) ch = await createCustomHostname(ctx, creds, zoneId, domain);
+					if (!ch) return { success: false, error: "Could not create the custom hostname." };
+					if (kvId) await mapDomain(ctx, creds, kvId, domain, backend);
+					const active = isActive(ch);
+					// Once live, the custom domain becomes the canonical origin and the
+					// frontend is rebuilt with it.
+					if (active) await applyCanonicalUrl(ctx, settings, project, `https://${domain}`);
+					return {
+						success: true,
+						domain,
+						status: ch.status,
+						sslStatus: ch.ssl?.status ?? null,
+						active,
+						records: recordsFor(domain, ch),
+					};
 				},
 			},
 

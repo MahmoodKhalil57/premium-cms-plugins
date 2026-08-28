@@ -56,6 +56,8 @@ export interface Settings {
 	githubInstallUrl: string;
 	/** owner/repo of the frontend-static template repo to generate project repos from. */
 	githubFrontendTemplate: string;
+	/** The `custom-domains` KV namespace id the router worker reads (platform-level). */
+	customDomainsKvId: string;
 	/**
 	 * Set up behind the scenes (not on the settings form) — the operator seeds
 	 * these on a platform instance; the site owner only enters credentials above.
@@ -129,6 +131,7 @@ export async function readSettings(ctx: PluginContext): Promise<Settings> {
 			githubPrivateKey: asString(map.githubPrivateKey),
 			githubInstallUrl: asString(map.githubInstallUrl).trim(),
 			githubFrontendTemplate: asString(map.githubFrontendTemplate).trim(),
+			customDomainsKvId: asString(map.customDomainsKvId).trim(),
 			marketplaceUrl: (asString(map.marketplaceUrl).trim() || DEFAULT_MARKETPLACE_URL).replace(
 				/\/$/,
 				"",
@@ -154,6 +157,7 @@ export async function readSettings(ctx: PluginContext): Promise<Settings> {
 			githubPrivateKey: "",
 			githubInstallUrl: "",
 			githubFrontendTemplate: "",
+			customDomainsKvId: "",
 			marketplaceUrl: DEFAULT_MARKETPLACE_URL,
 			ownerEmail: "",
 			deployKey: "",

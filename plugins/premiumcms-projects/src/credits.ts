@@ -156,6 +156,7 @@ export async function pushCreditsSettings(
 	settings: Settings,
 	d1Id: string,
 	id: string,
+	defaultUrl: string,
 ): Promise<void> {
 	const creds = credsOf(settings);
 	const book = priceBook(settings);
@@ -187,6 +188,11 @@ export async function pushCreditsSettings(
 			"frontend:connect_url",
 			`${parentOrigin}/_emdash/api/plugins/premiumcms-projects/githubAuthStart`,
 		],
+		[
+			"custom_domain:api_url",
+			`${parentOrigin}/_emdash/api/plugins/premiumcms-projects/customDomain`,
+		],
+		["custom_domain:default_url", defaultUrl],
 	]);
 }
 

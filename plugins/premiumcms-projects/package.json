@@ -16,10 +16,10 @@
 		"test": "vitest run"
 	},
 	"peerDependencies": {
-		"@premium-cms/emdash": "^0.35.9"
+		"@premium-cms/emdash": "^0.35.10"
 	},
 	"devDependencies": {
-		"@premium-cms/emdash": "^0.35.9",
+		"@premium-cms/emdash": "^0.35.10",
 		"typescript": "^6.0.3",
 		"vitest": "^4.1.5"
 	},
