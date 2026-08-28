@@ -1,0 +1,10 @@
+{
+	// Release runner: a placeholder Worker whose only purpose is to give this
+	// repo a Cloudflare Workers Build. The build command (bin/release.sh) lists
+	// new plugin versions on the marketplace and rolls the instances; the
+	// deploy command ships this no-op so the build has something to deploy.
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "premium-cms-plugins-release",
+	"main": "index.ts",
+	"compatibility_date": "2026-02-24",
+}
