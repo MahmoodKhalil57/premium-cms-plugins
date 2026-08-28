@@ -374,6 +374,14 @@ async function enableFrontend(
 		"INSERT INTO options (name,value) VALUES ('frontend:pages_url', ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value",
 		[JSON.stringify(backendUrl)],
 	);
+	// Where the site lives on GitHub — shown on the child's dashboard.
+	await d1Query(
+		ctx,
+		creds,
+		d1Id,
+		"INSERT INTO options (name,value) VALUES ('frontend:repo_url', ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value",
+		[JSON.stringify(`https://github.com/${owner}/${repo}`)],
+	);
 	await ctx.kv.set(`github:token:${project}`, token);
 	await ctx.kv.set(`github:owner:${project}`, owner);
 	await ctx.kv.set(`github:repo:${project}`, repo);
