@@ -152,7 +152,7 @@ export async function pushFiles(
 	token: string,
 	owner: string,
 	repo: string,
-	files: Array<{ path: string; content: string }>,
+	files: Array<{ path: string; content: string; encoding?: "utf-8" | "base64" }>,
 	message: string,
 	branch = "main",
 ): Promise<{ ok: boolean; error?: string }> {
@@ -166,7 +166,7 @@ export async function pushFiles(
 	for (const f of files) {
 		const blob = await gh(ctx, token, "POST", `/repos/${owner}/${repo}/git/blobs`, {
 			content: f.content,
-			encoding: "utf-8",
+			encoding: f.encoding ?? "utf-8",
 		});
 		if (!blob.ok) return { ok: false, error: `blob ${f.path}: ${blob.status}` };
 		tree.push({
@@ -244,4 +244,77 @@ export async function dispatchRebuild(
 		event_type: "content-published",
 	});
 	return r.status === 204;
+}
+
+/* ── Template resolution + re-sync ─────────────────────────────────── */
+
+/**
+ * Resolve the frontend template repo (`owner/repo`) for a theme. `spec` is
+ * either a plain `owner/repo` used for every theme, or a JSON map
+ * `{"<theme>":"owner/repo", "*":"owner/repo"}` with an optional `*` fallback.
+ */
+export function templateForTheme(spec: string, theme: string): string {
+	const s = (spec || "").trim();
+	if (!s) return "";
+	if (s.startsWith("{")) {
+		try {
+			const map = JSON.parse(s) as Record<string, unknown>;
+			const hit = map[theme] ?? map["*"];
+			return typeof hit === "string" ? hit : "";
+		} catch {
+			return "";
+		}
+	}
+	return s;
+}
+
+interface TreeEntry {
+	path: string;
+	type: string;
+	sha: string;
+}
+
+async function repoTree(
+	ctx: PluginContext,
+	token: string,
+	ownerRepo: string,
+): Promise<Map<string, string> | null> {
+	const r = await gh(ctx, token, "GET", `/repos/${ownerRepo}/git/trees/HEAD?recursive=1`);
+	if (!r.ok) return null;
+	const out = new Map<string, string>();
+	for (const e of r.json<{ tree?: TreeEntry[] }>().tree ?? []) {
+		if (e.type === "blob") out.set(e.path, e.sha);
+	}
+	return out;
+}
+
+/**
+ * Copy the template repo's current files into a generated site repo: every
+ * path the template owns whose blob differs (or is missing) is committed;
+ * files the site added on its own are left alone. Returns how many changed.
+ */
+export async function syncTemplate(
+	ctx: PluginContext,
+	token: string,
+	template: string, // "owner/repo"
+	owner: string,
+	repo: string,
+): Promise<{ ok: boolean; changed: number; error?: string }> {
+	const src = await repoTree(ctx, token, template);
+	if (!src) return { ok: false, changed: 0, error: `template ${template} unreadable` };
+	const dst = (await repoTree(ctx, token, `${owner}/${repo}`)) ?? new Map<string, string>();
+
+	const files: Array<{ path: string; content: string; encoding: "base64" }> = [];
+	for (const [path, sha] of src) {
+		if (dst.get(path) === sha) continue;
+		const blob = await gh(ctx, token, "GET", `/repos/${template}/git/blobs/${sha}`);
+		if (!blob.ok) return { ok: false, changed: 0, error: `blob ${path}: ${blob.status}` };
+		const content = blob.json<{ content?: string }>().content ?? "";
+		files.push({ path, content: content.replace(/\n/g, ""), encoding: "base64" });
+	}
+	if (files.length === 0) return { ok: true, changed: 0 };
+	const push = await pushFiles(ctx, token, owner, repo, files, "chore: sync frontend template");
+	return push.ok
+		? { ok: true, changed: files.length }
+		: { ok: false, changed: 0, error: push.error };
 }

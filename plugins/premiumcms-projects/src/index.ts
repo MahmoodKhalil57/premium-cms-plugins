@@ -54,8 +54,10 @@ import {
 	enablePages,
 	exchangeCode,
 	setSecret,
+	templateForTheme,
 	whoami,
 } from "./github.js";
+import { ROLL_STEPS, rollChildren, type RollStep } from "./roll.js";
 import {
 	cfZoneId,
 	d1Query,
@@ -228,26 +230,6 @@ async function runProvisionTick(
 		}
 	}
 	return { provisioned: 0 };
-}
-
-/**
- * Resolve the frontend template repo (`owner/repo`) for a theme. `spec` is
- * either a plain `owner/repo` used for every theme, or a JSON map
- * `{"<theme>":"owner/repo", "*":"owner/repo"}` with an optional `*` fallback.
- */
-function templateForTheme(spec: string, theme: string): string {
-	const s = (spec || "").trim();
-	if (!s) return "";
-	if (s.startsWith("{")) {
-		try {
-			const map = JSON.parse(s) as Record<string, unknown>;
-			const hit = map[theme] ?? map["*"];
-			return typeof hit === "string" ? hit : "";
-		} catch {
-			return "";
-		}
-	}
-	return s;
 }
 
 /**
@@ -776,6 +758,37 @@ export function createPlugin(): ResolvedPlugin {
 			 * Projects (from the content collection), for a custom admin screen. No
 			 * registry any more: a row's `url` being set is what "provisioned" means.
 			 */
+			/**
+			 * Roll every provisioned child forward (bundle / plugins / seed /
+			 * frontend, see roll.ts) and cascade the same request down the tree.
+			 * Admin-authenticated: CI calls the root with its platform token, and
+			 * each parent calls its children with the tokens it minted for them.
+			 * An instance that isn't a control plane answers `skipped`.
+			 */
+			roll: {
+				handler: async (ctx) => {
+					const settings = await readSettings(ctx);
+					if (!validate(settings).ok) return { success: true, skipped: "not a control plane" };
+					const body = (ctx.input ?? {}) as {
+						steps?: unknown;
+						cascade?: unknown;
+						project?: unknown;
+					};
+					const wanted = Array.isArray(body.steps) ? body.steps.map(str) : [];
+					const steps = (wanted.length ? wanted : [...ROLL_STEPS]).filter((s): s is RollStep =>
+						(ROLL_STEPS as readonly string[]).includes(s),
+					);
+					const project = str(body.project) || undefined;
+					if (project && !isUlid(project)) return { success: false, error: "invalid project" };
+					const results = await rollChildren(ctx, settings, {
+						steps,
+						cascade: body.cascade !== false,
+						project,
+					});
+					return { success: results.every((r) => r.ok), steps, results };
+				},
+			},
+
 			projects: {
 				handler: async (ctx) => {
 					const rows = await listProjectRows(ctx);

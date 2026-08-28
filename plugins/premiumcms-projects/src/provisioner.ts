@@ -34,6 +34,7 @@ import {
 } from "./cf.js";
 import { pushCreditsSettings, seedInitialCredits } from "./credits.js";
 import { COLLECTION } from "./content.js";
+import { mintPlatformToken } from "./platform.js";
 import { credsOf, siteZone, type Settings } from "./settings.js";
 
 /** ULID: 26 Crockford base32 chars (no I, L, O, U), case-insensitive. */
@@ -239,6 +240,10 @@ export async function bootstrapOwner(
 	);
 	if (!insOpt.success)
 		throw new Error(`setup-complete option failed: ${JSON.stringify(insOpt.errors)}`);
+
+	// The parent's service token into this child (plugin updates, reseed, the
+	// recursive roll). Minted last so the owner row it binds to exists.
+	await mintPlatformToken(ctx, creds, p.d1_id, p.id, email);
 
 	return p;
 }
