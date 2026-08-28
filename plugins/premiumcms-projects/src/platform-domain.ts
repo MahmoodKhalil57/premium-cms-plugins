@@ -4,17 +4,17 @@
  * A child may bring its own domain through the Cloudflare-for-SaaS flow
  * (domains.ts), but hostnames on the platform zone itself (premium-cms.com,
  * shop.premium-cms.com…) are the control plane's to assign: the operator sets
- * `domain` on the project row, and this attaches it to the child's Worker as
- * a Workers custom domain, makes it the child's canonical URL (and its
- * "default" for the Reset button), and rebuilds the frontend. Clearing the
- * field puts the instance back on its p<ulid> hostname. Reconciled on every
- * save, so it is idempotent; a rejected value is cleared with the reason
- * logged.
+ * `domain` on the project row, and this makes it the instance's ONE home —
+ * attached to its Worker in place of the p<ulid> hostname, its canonical URL,
+ * its Reset default, the backend its frontend builds against, and the origin
+ * its customer domains route to. Clearing the field moves the instance back
+ * onto p<ulid>. Reconciled on every save, so it is idempotent; a rejected
+ * value is cleared with the reason logged.
  */
 
 import type { PluginContext } from "@premium-cms/emdash/plugin";
 import { cfApi, cfZoneId, d1Query, findD1IdByName, resolveZone } from "./cf.js";
-import { normalizeDomain } from "./domains.js";
+import { normalizeDomain, remapDomains } from "./domains.js";
 import { dispatchRebuild, setSecret } from "./github.js";
 import { isUlid, resourceName } from "./provisioner.js";
 import { credsOf, siteZone, type Settings } from "./settings.js";
@@ -29,9 +29,10 @@ interface WorkerDomain {
 }
 
 /**
- * Make `url` an instance's canonical origin: write its `site:url` option and
- * rebuild its static frontend with the new SITE_URL (so the build's links and
- * its snapshot's absolute media URLs use it). The rebuild is best-effort.
+ * Make `url` an instance's home origin: its `site:url`, its Reset default,
+ * where "View site" points, and — through the site repo's build secrets — the
+ * backend its static frontend snapshots from and the SITE_URL it builds for.
+ * The rebuild is best-effort.
  */
 export async function applyCanonicalUrl(
 	ctx: PluginContext,
@@ -45,7 +46,8 @@ export async function applyCanonicalUrl(
 	const d1Id = await findD1IdByName(ctx, creds, `${rn}-db`);
 	if (d1Id) {
 		const rows: Array<[string, string]> = [["site:url", url]];
-		if (defaultUrl) rows.push(["custom_domain:default_url", defaultUrl]);
+		if (defaultUrl)
+			rows.push(["custom_domain:default_url", defaultUrl], ["frontend:pages_url", defaultUrl]);
 		for (const [name, value] of rows) {
 			await d1Query(
 				ctx,
@@ -62,6 +64,7 @@ export async function applyCanonicalUrl(
 	if (token && owner && repo) {
 		try {
 			await setSecret(ctx, token, owner, repo, "SITE_URL", url);
+			if (defaultUrl) await setSecret(ctx, token, owner, repo, "BACKEND_URL", defaultUrl);
 			await dispatchRebuild(ctx, token, owner, repo);
 		} catch (err) {
 			ctx.log.warn(`[premiumcms-projects] frontend rebuild for ${project} failed`, err);
@@ -91,8 +94,10 @@ export function rejectPlatformDomain(
 }
 
 /**
- * Reconcile a project's platform hostname with what is attached to its Worker.
- * Returns what changed (empty when already in sync) or throws with the reason.
+ * Reconcile a project's home hostname with what is attached to its Worker:
+ * exactly one hostname — the assigned platform domain, else p<ulid>. Returns
+ * the home URL and what changed (empty when already in sync); throws with the
+ * reason when the request is rejected.
  */
 export async function applyPlatformDomain(
 	ctx: PluginContext,
@@ -100,43 +105,51 @@ export async function applyPlatformDomain(
 	project: string,
 	requested: string,
 	rows: Array<{ id: string; data: Record<string, unknown> }>,
-): Promise<string[]> {
+): Promise<{ url: string; changes: string[] }> {
 	if (!isUlid(project)) throw new Error("not a ULID");
 	const creds = credsOf(settings);
 	const rn = resourceName(project);
 	const zone = (await resolveZone(ctx, creds, siteZone(ctx))).name;
-	const home = `${rn}.${zone}`;
 	const domain = normalizeDomain(requested);
 	if (domain) {
 		const why = rejectPlatformDomain(domain, zone, rows, project);
 		if (why) throw new Error(why);
 	}
+	const home = domain || `${rn}.${zone}`;
+	const url = `https://${home}`;
 
 	const all = await cfApi<WorkerDomain[]>(ctx, creds, "GET", "/workers/domains");
+	if (!all.success) throw new Error(`list domains: ${JSON.stringify(all.errors)}`);
 	const mine = (all.result ?? []).filter((d) => d.service === rn);
 	const changes: string[] = [];
 
-	for (const d of mine) {
-		if (d.hostname === home || d.hostname === domain) continue;
-		const r = await cfApi(ctx, creds, "DELETE", `/workers/domains/${d.id}`);
-		if (!r.success) throw new Error(`detach ${d.hostname}: ${JSON.stringify(r.errors)}`);
-		changes.push(`detached ${d.hostname}`);
-	}
-	if (domain && !mine.some((d) => d.hostname === domain)) {
+	// Attach the new home before dropping the old one so the instance is never
+	// unreachable in between.
+	if (!mine.some((d) => d.hostname === home)) {
 		const r = await cfApi(ctx, creds, "PUT", "/workers/domains", {
 			zone_id: await cfZoneId(ctx, creds, zone),
-			hostname: domain,
+			hostname: home,
 			service: rn,
 			environment: "production",
 		});
-		if (!r.success) throw new Error(`attach ${domain}: ${JSON.stringify(r.errors)}`);
-		changes.push(`attached ${domain}`);
+		if (!r.success) throw new Error(`attach ${home}: ${JSON.stringify(r.errors)}`);
+		changes.push(`attached ${home}`);
+	}
+	for (const d of mine) {
+		if (d.hostname === home) continue;
+		const r = await cfApi(ctx, creds, "DELETE", `/workers/domains/${d.id}`);
+		if (!r.success) throw new Error(`detach ${d.hostname}: ${JSON.stringify(r.errors)}`);
+		changes.push(`detached ${d.hostname}`);
+		// Customer domains routed (Cloudflare for SaaS) to the old home follow it.
+		if (settings.customDomainsKvId) {
+			const moved = await remapDomains(ctx, creds, settings.customDomainsKvId, d.hostname, home);
+			if (moved.length) changes.push(`re-routed ${moved.join(", ")}`);
+		}
 	}
 
 	if (changes.length) {
-		const url = `https://${domain || home}`;
 		await applyCanonicalUrl(ctx, settings, project, url, url);
-		changes.push(`canonical ${url}`);
+		changes.push(`home ${url}`);
 	}
-	return changes;
+	return { url, changes };
 }

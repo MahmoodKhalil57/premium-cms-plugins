@@ -183,3 +183,29 @@ export function recordsFor(hostname: string, ch: CustomHostname | null): DnsReco
 export function isActive(ch: CustomHostname | null): boolean {
 	return ch?.status === "active" && ch?.ssl?.status === "active";
 }
+
+/**
+ * Re-point every router entry that targets `from` at `to` — used when an
+ * instance's home hostname changes so customer domains keep resolving to it.
+ * Returns the hostnames re-pointed.
+ */
+export async function remapDomains(
+	ctx: PluginContext,
+	creds: CfCreds,
+	kvId: string,
+	from: string,
+	to: string,
+): Promise<string[]> {
+	const base = `${CF}/accounts/${creds.accountId}/storage/kv/namespaces/${kvId}`;
+	const auth = { Authorization: `Bearer ${creds.apiToken}` };
+	const list = await http(ctx, `${base}/keys?limit=1000`, { headers: auth });
+	const keys = list.json<{ result?: Array<{ name: string }> }>().result ?? [];
+	const moved: string[] = [];
+	for (const { name } of keys) {
+		const cur = await http(ctx, `${base}/values/${encodeURIComponent(name)}`, { headers: auth });
+		if (!cur.ok || cur.text.trim() !== from) continue;
+		await mapDomain(ctx, creds, kvId, name, to);
+		moved.push(name);
+	}
+	return moved;
+}

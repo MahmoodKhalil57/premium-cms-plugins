@@ -45,7 +45,7 @@ import {
 	resourceName,
 } from "./provisioner.js";
 import { type Settings, credsOf, readSettings, siteZone, validate } from "./settings.js";
-import { grantCredits } from "./credits.js";
+import { grantCredits, pushCreditsSettings } from "./credits.js";
 import { checkoutSessionIdFromEvent, createCheckout, retrieveCheckoutSession } from "./stripe.js";
 import {
 	authorizeUrl,
@@ -213,7 +213,29 @@ async function runProvisionTick(
 	const settings = await readSettings(ctx);
 	if (!validate(settings).ok) return { provisioned: 0 };
 
-	for (const row of await listProjectRows(ctx)) {
+	const rows = await listProjectRows(ctx);
+
+	// This control plane's own origin is baked into every child (top-up,
+	// connect-GitHub and custom-domain URLs all point back here). When our
+	// parent moves us to a new home, re-push those so the children follow.
+	const origin = (ctx.site?.url ?? "").replace(/\/$/, "");
+	const known = str(await ctx.kv.get("self:url"));
+	if (origin && origin !== known) {
+		for (const row of rows) {
+			if (!str(row.data.url) || !isUlid(row.id)) continue;
+			try {
+				const d1Id = await findD1IdByName(ctx, credsOf(settings), `${resourceName(row.id)}-db`);
+				if (d1Id) await pushCreditsSettings(ctx, settings, d1Id, row.id, str(row.data.url));
+			} catch (err) {
+				ctx.log.warn(`[premiumcms-projects] re-push parent url to ${row.id} failed`, err);
+			}
+		}
+		await ctx.kv.set("self:url", origin);
+		if (known)
+			ctx.log.info(`[premiumcms-projects] parent origin ${known} -> ${origin}: children updated`);
+	}
+
+	for (const row of rows) {
 		if (str(row.data.url)) continue; // provisioned already → done
 		if (!str(row.data.label) || !str(row.data.theme)) continue; // not ready to provision
 		if (!isUlid(row.id)) {
@@ -402,7 +424,7 @@ export function createPlugin(): ResolvedPlugin {
 					// cleared so the row never claims a hostname it doesn't hold.
 					if ("domain" in fields) {
 						try {
-							const changes = await applyPlatformDomain(
+							const { url, changes } = await applyPlatformDomain(
 								ctx,
 								settings,
 								id,
@@ -411,6 +433,8 @@ export function createPlugin(): ResolvedPlugin {
 							);
 							if (changes.length)
 								ctx.log.info(`[premiumcms-projects] domain ${id}: ${changes.join(", ")}`);
+							// The row's url is how this control plane reaches the child.
+							if (str(fields.url) !== url) await ctx.content.update(COLLECTION, id, { url });
 						} catch (err) {
 							const message = err instanceof Error ? err.message : String(err);
 							ctx.log.error(`[premiumcms-projects] domain for ${id} rejected: ${message}`);
@@ -725,7 +749,7 @@ export function createPlugin(): ResolvedPlugin {
 					let ch = await findCustomHostname(ctx, creds, zoneId, domain);
 					if (!ch) ch = await createCustomHostname(ctx, creds, zoneId, domain);
 					if (!ch) return { success: false, error: "Could not create the custom hostname." };
-					if (kvId) await mapDomain(ctx, creds, kvId, domain, backend);
+					if (kvId) await mapDomain(ctx, creds, kvId, domain, home);
 					const active = isActive(ch);
 					// Once live, the custom domain becomes the canonical origin and the
 					// frontend is rebuilt with it.
