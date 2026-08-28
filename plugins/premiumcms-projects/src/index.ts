@@ -58,6 +58,7 @@ import {
 	whoami,
 } from "./github.js";
 import { ROLL_STEPS, rollChildren, type RollStep } from "./roll.js";
+import { applyCanonicalUrl, applyPlatformDomain } from "./platform-domain.js";
 import {
 	cfZoneId,
 	d1Query,
@@ -332,45 +333,6 @@ async function enableFrontend(
 	return pagesUrl;
 }
 
-/**
- * Make `url` an instance's canonical origin: write its `site:url` option and
- * rebuild its static frontend with the new SITE_URL (so the build's `base`/links
- * and its snapshot's absolute media URLs use the custom domain). The rebuild is
- * best-effort — it needs the owner's stored GitHub token; without it the site
- * still serves at the domain through the proxy, just with links pointing at the
- * previous origin until the next frontend build.
- */
-async function applyCanonicalUrl(
-	ctx: PluginContext,
-	settings: Settings,
-	project: string,
-	url: string,
-): Promise<void> {
-	const creds = credsOf(settings);
-	const rn = resourceName(project);
-	const d1Id = await findD1IdByName(ctx, creds, `${rn}-db`);
-	if (d1Id) {
-		await d1Query(
-			ctx,
-			creds,
-			d1Id,
-			"INSERT INTO options (name,value) VALUES ('site:url', ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value",
-			[JSON.stringify(url)],
-		);
-	}
-	const token = await ctx.kv.get<string>(`github:token:${project}`);
-	const owner = await ctx.kv.get<string>(`github:owner:${project}`);
-	const repo = await ctx.kv.get<string>(`github:repo:${project}`);
-	if (token && owner && repo) {
-		try {
-			await setSecret(ctx, token, owner, repo, "SITE_URL", url);
-			await dispatchRebuild(ctx, token, owner, repo);
-		} catch (err) {
-			ctx.log.warn(`[premiumcms-projects] frontend rebuild for ${project} failed`, err);
-		}
-	}
-}
-
 // ─── Plugin Descriptor (for a theme's `plugins: [...]` config) ───
 
 /**
@@ -429,13 +391,34 @@ export function createPlugin(): ResolvedPlugin {
 					const id = str((event.content as Record<string, unknown>).id);
 					const addCredits = Number(fields.add_credits);
 
-					// Only act when provisioned (url set) and a positive grant is queued.
-					if (!str(fields.url)) return;
-					if (!id || !Number.isFinite(addCredits) || addCredits <= 0) return;
-					if (!isUlid(id)) return;
+					// Only act on provisioned rows (url set).
+					if (!str(fields.url) || !id || !isUlid(id)) return;
 
 					const settings = await readSettings(ctx);
 					if (!validate(settings).ok) return;
+
+					// Platform-zone hostname: reconcile what the operator asked for with
+					// what is attached to the child's Worker. A rejected value is
+					// cleared so the row never claims a hostname it doesn't hold.
+					if ("domain" in fields) {
+						try {
+							const changes = await applyPlatformDomain(
+								ctx,
+								settings,
+								id,
+								str(fields.domain),
+								await listProjectRows(ctx),
+							);
+							if (changes.length)
+								ctx.log.info(`[premiumcms-projects] domain ${id}: ${changes.join(", ")}`);
+						} catch (err) {
+							const message = err instanceof Error ? err.message : String(err);
+							ctx.log.error(`[premiumcms-projects] domain for ${id} rejected: ${message}`);
+							if (str(fields.domain)) await ctx.content.update(COLLECTION, id, { domain: null });
+						}
+					}
+
+					if (!Number.isFinite(addCredits) || addCredits <= 0) return;
 
 					try {
 						const rn = resourceName(id);
@@ -715,17 +698,21 @@ export function createPlugin(): ResolvedPlugin {
 					const zoneId = await cfZoneId(ctx, creds, zone);
 					const kvId = settings.customDomainsKvId;
 					const backend = `${rn}.${zone}`;
+					// "Default" = the platform hostname the parent assigned (row.domain),
+					// else the instance's own p<ulid> hostname.
+					const row = (await listProjectRows(ctx)).find((r) => r.id === project);
+					const home = normalizeDomain(str(row?.data.domain)) || backend;
 					const domain = normalizeDomain(str(body.domain));
 					const action = str(body.action) || "check";
 
 					if (action === "reset") {
-						if (domain) {
+						if (domain && domain !== home) {
 							const ch = await findCustomHostname(ctx, creds, zoneId, domain);
 							if (ch) await deleteCustomHostname(ctx, creds, zoneId, ch.id);
 							if (kvId) await unmapDomain(ctx, creds, kvId, domain);
 						}
-						await applyCanonicalUrl(ctx, settings, project, `https://${backend}`);
-						return { success: true, reset: true, defaultUrl: `https://${backend}` };
+						await applyCanonicalUrl(ctx, settings, project, `https://${home}`);
+						return { success: true, reset: true, defaultUrl: `https://${home}` };
 					}
 
 					if (!domain) return { success: false, error: "A domain is required." };
