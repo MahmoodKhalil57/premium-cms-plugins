@@ -42,6 +42,21 @@ export interface Settings {
 	creditsMarkup: number;
 	creditsEnforce: boolean;
 	/**
+	 * GitHub App credentials for the static-frontend hosting mode: provision a
+	 * GitHub repo (Astro frontend + seed), enable Pages, and set build secrets so
+	 * the public site is a static GitHub Pages build (never hosted on Cloudflare).
+	 * The App ID + client id/secret + install URL are public-ish; the private key
+	 * (PEM) is the sensitive one — it's what mints installation tokens for
+	 * automated repo/Pages/secret setup.
+	 */
+	githubAppId: string;
+	githubClientId: string;
+	githubClientSecret: string;
+	githubPrivateKey: string;
+	githubInstallUrl: string;
+	/** owner/repo of the frontend-static template repo to generate project repos from. */
+	githubFrontendTemplate: string;
+	/**
 	 * Set up behind the scenes (not on the settings form) — the operator seeds
 	 * these on a platform instance; the site owner only enters credentials above.
 	 */
@@ -108,6 +123,12 @@ export async function readSettings(ctx: PluginContext): Promise<Settings> {
 			stripeWebhookSecret: asString(map.stripeWebhookSecret),
 			creditsMarkup: asNumber(map.creditsMarkup, 2),
 			creditsEnforce: asBoolean(map.creditsEnforce, false),
+			githubAppId: asString(map.githubAppId).trim(),
+			githubClientId: asString(map.githubClientId).trim(),
+			githubClientSecret: asString(map.githubClientSecret),
+			githubPrivateKey: asString(map.githubPrivateKey),
+			githubInstallUrl: asString(map.githubInstallUrl).trim(),
+			githubFrontendTemplate: asString(map.githubFrontendTemplate).trim(),
 			marketplaceUrl: (asString(map.marketplaceUrl).trim() || DEFAULT_MARKETPLACE_URL).replace(
 				/\/$/,
 				"",
@@ -127,6 +148,12 @@ export async function readSettings(ctx: PluginContext): Promise<Settings> {
 			stripeWebhookSecret: "",
 			creditsMarkup: 2,
 			creditsEnforce: false,
+			githubAppId: "",
+			githubClientId: "",
+			githubClientSecret: "",
+			githubPrivateKey: "",
+			githubInstallUrl: "",
+			githubFrontendTemplate: "",
 			marketplaceUrl: DEFAULT_MARKETPLACE_URL,
 			ownerEmail: "",
 			deployKey: "",

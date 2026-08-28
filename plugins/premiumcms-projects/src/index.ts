@@ -1,30 +1,28 @@
 /**
  * Projects (provider) — provisions fully isolated EmDash instances on
- * Cloudflare.
+ * Cloudflare. STATELESS, "provision and forget", child-side metering.
  *
- * A row in the `projects` collection (created by a seed elsewhere) is the
- * trigger: on save this plugin derives a project id from the row's label,
- * seeds a kv registry entry, and drives a resumable state machine
- * (createResources → deployWorker → attachDomain → bootstrapOwner) that
- * stands up the child's Worker, D1, KV namespace, R2 bucket and assigned
- * domain, then writes the owner user straight into the child's D1. The golden
- * bundle itself is uploaded by the trusted marketplace deploy service; this
- * plugin supplies the per-project bindings and the provider's Cloudflare
- * credentials (entered on its declarative settings page).
+ * A row in the `projects` collection (created by a seed elsewhere) is the only
+ * persistent state. Its id is a ULID, and EVERY Cloudflare resource is named
+ * deterministically from it (`resourceName(id) = "p" + id`), so nothing needs
+ * to be stored on the parent side — no kv registry. The row's `url` field
+ * doubles as the "already provisioned" marker: empty ⇒ still to do, set ⇒ done.
  *
- * The authoritative registry is ctx.kv (`state:project:<id>`); the content row
- * is a human-facing mirror, matched by its `project_id` field. Provisioning
- * advances one step per invocation — one step on the triggering save, the rest
- * on a per-minute cron task — so no single hook has to outlast a Cloudflare
- * round-trip budget.
+ * The per-minute `tick` route (driven by the instance's scheduled handler, so
+ * it has a full subrequest budget) provisions ONE pending row per tick end to
+ * end — create/lookup D1 + KV + R2, deploy the golden bundle with its bindings,
+ * attach `<rn>.<zone>`, seed the child's credits options + initial balance, and
+ * bootstrap the owner admin — then writes the live url back. `content:afterSave`
+ * only handles operator credit top-ups (it has no subrequest budget to
+ * provision); `content:afterDelete` tears every resource down by name.
+ * Metering now happens INSIDE each child (a core credits middleware) — there is
+ * no parent-side CF-analytics sync.
  *
- * This is a TRUSTED, in-process plugin. It is loaded via a theme's
- * `plugins: [premiumcmsProjects()]` config and its factory `createPlugin`
- * returns a `definePlugin(...)` result. Because it is trusted, its settings
- * are declared with `admin.settingsSchema` and rendered by the admin's
- * standard auto-generated form (Plugins → Projects → Settings) instead of a
- * custom Block Kit page — the declarative schema writes to the same
- * `settings:` kv prefix that `readSettings` reads.
+ * This is a TRUSTED, in-process plugin loaded via a theme's
+ * `plugins: [premiumcmsProjects()]` config; its factory `createPlugin` returns
+ * a `definePlugin(...)` result. Settings are declared with `admin.settingsSchema`
+ * and rendered by the admin's auto-generated form (Plugins → Projects →
+ * Settings), writing to the same `settings:` kv prefix `readSettings` reads.
  */
 
 import type {
@@ -38,16 +36,27 @@ import { definePlugin } from "@premium-cms/emdash";
 /** The admin settings-schema map type (`Record<string, SettingField>`). */
 type SettingsSchema = NonNullable<PluginAdminConfig["settingsSchema"]>;
 
-import { COLLECTION, fieldsOf, listUnclaimed, mirrorState } from "./content.js";
-import { advance, getState, listStates, projectIdFromLabel, seedState } from "./provisioner.js";
-import { credsOf, readSettings, validate } from "./settings.js";
+import { COLLECTION, fieldsOf, listProjectRows } from "./content.js";
 import {
-	childBalanceMicros,
-	grantCredits,
-	pushCreditsSettings,
-	syncExternalUsage,
-} from "./credits.js";
+	destroyProject,
+	isUlid,
+	projectBindings,
+	provisionAll,
+	resourceName,
+} from "./provisioner.js";
+import { type Settings, credsOf, readSettings, siteZone, validate } from "./settings.js";
+import { grantCredits } from "./credits.js";
 import { checkoutSessionIdFromEvent, createCheckout, retrieveCheckoutSession } from "./stripe.js";
+import {
+	authorizeUrl,
+	createFromTemplate,
+	dispatchRebuild,
+	enablePages,
+	exchangeCode,
+	setSecret,
+	whoami,
+} from "./github.js";
+import { d1Query, deployService, findD1IdByName, findKvIdByName, resolveZone } from "./cf.js";
 
 const STEP_TIMEOUT_MS = 60_000; // one Cloudflare-round-trip budget per step
 
@@ -64,6 +73,8 @@ const CAPABILITIES = ["network:request", "content:read", "content:write"] as con
 const ALLOWED_HOSTS = [
 	"api.cloudflare.com",
 	"api.stripe.com",
+	"api.github.com",
+	"github.com",
 	"marketplace.premium-cms.com",
 	"*.premium-cms.com",
 ];
@@ -131,100 +142,195 @@ const SETTINGS_SCHEMA: SettingsSchema = {
 		description: "When on, children are metered and suspended once their credits run out.",
 		default: false,
 	},
+	githubAppId: {
+		type: "string",
+		label: "GitHub App ID",
+		description:
+			"For static-frontend hosting: provisions a GitHub repo (Astro frontend + seed) built to GitHub Pages instead of hosting the frontend on Cloudflare.",
+	},
+	githubClientId: {
+		type: "string",
+		label: "GitHub App client ID",
+		description: "The App's client id (Iv1.… / Iv23…).",
+	},
+	githubClientSecret: {
+		type: "secret",
+		label: "GitHub App client secret",
+		description: "The App's client secret (OAuth user-authorization flow).",
+	},
+	githubPrivateKey: {
+		type: "secret",
+		label: "GitHub App private key (PEM)",
+		description:
+			"The App's private key — required to mint installation tokens for automated repo / Pages / secret setup. Paste the full -----BEGIN…END----- PEM.",
+	},
+	githubInstallUrl: {
+		type: "url",
+		label: "GitHub App install URL",
+		description:
+			"e.g. https://github.com/apps/premium-cms — where a customer installs the App on their account.",
+	},
+	githubFrontendTemplate: {
+		type: "string",
+		label: "Frontend template repo (owner/repo)",
+		description:
+			"A GitHub template repo (the frontend-static tooling + a theme) that each project's static-frontend repo is generated from.",
+	},
 };
 
 /**
- * One provisioning tick: claim any unclaimed Projects rows, then advance every
- * in-flight project one step. Runs in a fresh invocation (the `tick` route,
- * driven by the instance's own scheduled handler) so it has a full subrequest
- * budget — unlike `content:afterSave`, which shares the content-save request's
- * exhausted budget.
+ * One provisioning tick: provision the FIRST pending Projects row (empty `url`,
+ * with a `label` + `theme`) end to end, one per tick to bound the work. Runs in
+ * a fresh invocation (the `tick` route, driven by the instance's own scheduled
+ * handler) so it has a full subrequest budget — unlike `content:afterSave`,
+ * which shares the content-save request's exhausted budget. On any error the
+ * row's `url` is left empty, so the next tick retries (provisioning is
+ * idempotent). Rows whose `url` is already set are done and skipped.
  */
 async function runProvisionTick(
 	ctx: PluginContext,
-): Promise<{ claimed: number; advanced: number }> {
+): Promise<{ provisioned: number; error?: string }> {
 	const settings = await readSettings(ctx);
-	if (!validate(settings).ok) return { claimed: 0, advanced: 0 };
+	if (!validate(settings).ok) return { provisioned: 0 };
 
-	let claimed = 0;
-	for (const row of await listUnclaimed(ctx)) {
-		let id: string;
-		try {
-			id = projectIdFromLabel(row.label);
-		} catch (err) {
-			ctx.log.warn(`[premiumcms-projects] ${err instanceof Error ? err.message : String(err)}`);
+	for (const row of await listProjectRows(ctx)) {
+		if (str(row.data.url)) continue; // provisioned already → done
+		if (!str(row.data.label) || !str(row.data.theme)) continue; // not ready to provision
+		if (!isUlid(row.id)) {
+			ctx.log.warn(`[premiumcms-projects] row ${row.id} is not a ULID — skipping`);
 			continue;
 		}
-		if (await getState(ctx, id)) continue;
-		await seedState(ctx, settings, {
-			id,
-			label: row.label,
-			theme: row.theme,
-			ownerEmail: settings.ownerEmail,
-			contentId: row.contentId,
-		});
-		if (ctx.content?.update) {
-			await ctx.content.update(COLLECTION, row.contentId, {
-				project_id: id,
-				provision_status: "creating",
-			});
-		}
-		claimed++;
-	}
-
-	let advanced = 0;
-	for (const s of await listStates(ctx)) {
-		if (s.status === "live" || s.status === "error") continue;
 		try {
-			await advance(ctx, settings, s.id);
-			advanced++;
+			await provisionAll(ctx, settings, row);
+			return { provisioned: 1 }; // one project per tick — bound the work
 		} catch (err) {
-			ctx.log.error(`[premiumcms-projects] advance for ${s.id} failed`, err);
+			// Leave `url` empty so the next tick retries from scratch.
+			const message = err instanceof Error ? err.message : String(err);
+			ctx.log.error(`[premiumcms-projects] provision of ${row.id} failed`, message);
+			return { provisioned: 0, error: message }; // one heavy op per tick, even on failure
 		}
-		const fresh = await getState(ctx, s.id);
-		if (fresh) await mirrorState(ctx, fresh);
 	}
-	return { claimed, advanced };
+	return { provisioned: 0 };
 }
 
 /**
- * One billing pass: for each live project, refresh its Cloudflare usage into
- * its ledger (throttled per-project) and push the current price book +
- * enforcement flag + top-up target. Cheap on non-enforced setups: a live
- * project is still metered so its owner sees a real bill, but nothing is
- * blocked unless `creditsEnforce` is on.
+ * Resolve the frontend template repo (`owner/repo`) for a theme. `spec` is
+ * either a plain `owner/repo` used for every theme, or a JSON map
+ * `{"<theme>":"owner/repo", "*":"owner/repo"}` with an optional `*` fallback.
  */
-const BILLING_SYNC_INTERVAL_MS = 30 * 60_000; // at most twice an hour per project
-
-async function runBillingTick(ctx: PluginContext): Promise<{ synced: number }> {
-	const settings = await readSettings(ctx);
-	if (!validate(settings).ok) return { synced: 0 };
-
-	// One project per tick: a scheduled invocation has a bounded budget and the
-	// Cloudflare analytics queries are slow. Throttled projects are skipped with
-	// no work, so most ticks are free; due projects are metered one per minute.
-	// No content writes here — the Projects-row `credit_balance` is refreshed by
-	// the on-demand operator top-up, not the tick, to keep the tick light and
-	// free of afterSave re-entrancy.
-	let synced = 0;
-	for (const s of await listStates(ctx)) {
-		if (s.status !== "live" || !s.d1_id) continue;
-		const lastRaw = await ctx.kv.get<string>(`billing:synced:${s.id}`);
-		const last = lastRaw ? Date.parse(lastRaw) : 0;
-		if (Number.isFinite(last) && Date.now() - last < BILLING_SYNC_INTERVAL_MS) continue;
-
+function templateForTheme(spec: string, theme: string): string {
+	const s = (spec || "").trim();
+	if (!s) return "";
+	if (s.startsWith("{")) {
 		try {
-			await pushCreditsSettings(ctx, settings, s);
-			const res = await syncExternalUsage(ctx, settings, s);
-			await ctx.kv.set(`billing:synced:${s.id}`, new Date().toISOString());
-			synced += 1;
-			if (res.detail) ctx.log.warn(`[premiumcms-projects] usage sync ${s.id}: ${res.detail}`);
-		} catch (err) {
-			ctx.log.error(`[premiumcms-projects] billing sync for ${s.id} failed`, err);
+			const map = JSON.parse(s) as Record<string, unknown>;
+			const hit = map[theme] ?? map["*"];
+			return typeof hit === "string" ? hit : "";
+		} catch {
+			return "";
 		}
-		break; // one project per tick — bound the invocation's work
 	}
-	return { synced };
+	return s;
+}
+
+/**
+ * Build a provisioned project's managed static frontend and flip its proxy on:
+ * generate the customer's GitHub repo from the template, wire the backend↔CI
+ * preview secret + build secrets, enable Pages + a first build, redeploy the
+ * child worker with `FRONTEND_ORIGIN` pointing at the Pages URL, and record the
+ * enabled status + the owner token (kept for later rebuilds). Throws on a hard
+ * failure so the OAuth callback can report it. SITE_URL is the child's own
+ * canonical domain — the proxy serves the build at the domain root, so its
+ * links resolve with base "/".
+ */
+async function enableFrontend(
+	ctx: PluginContext,
+	settings: Settings,
+	project: string,
+	token: string,
+	owner: string,
+): Promise<string> {
+	const creds = credsOf(settings);
+	const rn = resourceName(project);
+	const d1Id = await findD1IdByName(ctx, creds, `${rn}-db`);
+	if (!d1Id) throw new Error("child D1 not found — is the project provisioned?");
+	const kvId = await findKvIdByName(ctx, creds, `${rn}-session`);
+	const zone = (await resolveZone(ctx, creds, siteZone(ctx))).name;
+	const backendUrl = `https://${rn}.${zone}`;
+	const repo = `site-${project.toLowerCase()}`;
+	const row = ctx.content?.get ? await ctx.content.get(COLLECTION, project) : null;
+	const rowData = (row?.data ?? {}) as Record<string, unknown>;
+	const label = str(rowData.label);
+	const theme = str(rowData.theme) || "marketing";
+
+	// The frontend template is per-theme: an instance built from theme X copies
+	// theme X's static frontend.
+	const template = templateForTheme(settings.githubFrontendTemplate, theme);
+	if (!template) throw new Error(`no frontend template configured for theme "${theme}"`);
+
+	const gen = await createFromTemplate(ctx, token, template, owner, repo, label || project);
+	if (!gen.ok) throw new Error(gen.error || "repo create failed");
+
+	const previewSecret = `prev_${crypto.randomUUID().replace(/-/g, "")}`;
+	await d1Query(
+		ctx,
+		creds,
+		d1Id,
+		"INSERT INTO options (name,value) VALUES ('emdash:preview_secret', ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value",
+		[JSON.stringify(previewSecret)],
+	);
+
+	for (const [name, value] of [
+		["BACKEND_URL", backendUrl],
+		["SITE_URL", backendUrl],
+		["EMDASH_PREVIEW_SECRET", previewSecret],
+		["SEED_SECRET", settings.deployKey],
+	] as Array<[string, string]>) {
+		const r = await setSecret(ctx, token, owner, repo, name, value);
+		if (!r.ok) ctx.log.warn(`[premiumcms-projects] secret ${name}: ${r.error}`);
+	}
+
+	await enablePages(ctx, token, owner, repo);
+	await dispatchRebuild(ctx, token, owner, repo);
+	const pagesUrl = `https://${owner.toLowerCase()}.github.io/${repo}`;
+
+	// Redeploy the child worker with the proxy target so the public site starts
+	// serving the Pages build. Every binding is re-supplied (the deploy replaces
+	// the set); FRONTEND_ORIGIN is the new one.
+	const bindings = [
+		...projectBindings(rn, { d1_id: d1Id, kv_id: kvId, bucket: `${rn}-media`, label }, settings),
+		{ type: "plain_text", name: "FRONTEND_ORIGIN", text: pagesUrl },
+	];
+	await deployService(ctx, settings, "/api/v1/deploy", {
+		accountId: settings.cfAccountId,
+		apiToken: settings.cfApiToken,
+		script: rn,
+		theme,
+		version: "latest",
+		bindings,
+		cron: "* * * * *",
+	});
+
+	await d1Query(
+		ctx,
+		creds,
+		d1Id,
+		"INSERT INTO options (name,value) VALUES ('frontend:enabled','true') ON CONFLICT(name) DO UPDATE SET value='true'",
+	);
+	// "View site" points at the CANONICAL domain (served at the root through the
+	// proxy), not the raw github.io URL — that only resolves at the domain root
+	// because the build uses base "/".
+	await d1Query(
+		ctx,
+		creds,
+		d1Id,
+		"INSERT INTO options (name,value) VALUES ('frontend:pages_url', ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value",
+		[JSON.stringify(backendUrl)],
+	);
+	await ctx.kv.set(`github:token:${project}`, token);
+	await ctx.kv.set(`github:owner:${project}`, owner);
+	await ctx.kv.set(`github:repo:${project}`, repo);
+	return pagesUrl;
 }
 
 // ─── Plugin Descriptor (for a theme's `plugins: [...]` config) ───
@@ -264,10 +370,16 @@ export function createPlugin(): ResolvedPlugin {
 			},
 
 			/**
-			 * Provisioning trigger. Fires for every content save; acts only on the
-			 * `projects` collection, and only on a row that has not yet been claimed
-			 * (no `project_id`). Writing `project_id` back is what makes the follow-up
-			 * save a no-op, so there is no re-entrancy loop.
+			 * Operator credit top-up. Fires for every content save; acts only on the
+			 * `projects` collection. When a provisioned row (its `url` is set) is
+			 * saved with a positive `add_credits`, grant that many dollars into the
+			 * child's ledger and clear the input. Provisioning itself is NOT done
+			 * here — afterSave runs inside the content-save request and has no
+			 * subrequest budget for the CF API calls; the tick owns that.
+			 *
+			 * The child's D1 is resolved with NO stored state: rn = resourceName(id),
+			 * then the D1 uuid is looked up by the name `${rn}-db`. Clearing
+			 * add_credits re-saves with add_credits=null, so there is no loop.
 			 */
 			"content:afterSave": {
 				timeout: STEP_TIMEOUT_MS,
@@ -276,106 +388,85 @@ export function createPlugin(): ResolvedPlugin {
 					if (!ctx.content?.update) return;
 
 					const fields = fieldsOf(event.content);
-
-					// ── Operator credit top-up (from the Projects content editor) ──
-					// An admin sets "Add credits ($)" on a provisioned row and saves; we
-					// grant that amount into the child's ledger, clear the input and
-					// refresh the displayed balance. Runs for CLAIMED rows (which have a
-					// project_id), so it sits before the claim guard below.
+					const id = str((event.content as Record<string, unknown>).id);
 					const addCredits = Number(fields.add_credits);
-					const claimedId = str(fields.project_id);
-					if (claimedId && Number.isFinite(addCredits) && addCredits > 0) {
-						const topupSettings = await readSettings(ctx);
-						const state = await getState(ctx, claimedId);
-						const rowId = str((event.content as Record<string, unknown>).id);
-						if (state?.d1_id && validate(topupSettings).ok) {
-							const micros = Math.round(addCredits * 1_000_000);
-							try {
-								await grantCredits(
-									ctx,
-									topupSettings,
-									state,
-									micros,
-									`operator:${claimedId}:${Date.now()}`,
-									"Operator credit (parent admin)",
-								);
-								const balance = await childBalanceMicros(ctx, credsOf(topupSettings), state.d1_id);
-								// Clear the action input + reflect the new balance. This
-								// re-save carries add_credits=null, so it does not loop.
-								if (rowId) {
-									await ctx.content.update(COLLECTION, rowId, {
-										add_credits: null,
-										credit_balance: Math.round(balance) / 1_000_000,
-									});
-								}
-							} catch (err) {
-								ctx.log.error(`[premiumcms-projects] operator top-up for ${claimedId} failed`, err);
-							}
-						}
-						return;
-					}
 
-					if (str(fields.project_id)) return; // already claimed → cron drives it forward
-
-					const label = str(fields.label);
-					if (!label) return; // nothing to provision yet
+					// Only act when provisioned (url set) and a positive grant is queued.
+					if (!str(fields.url)) return;
+					if (!id || !Number.isFinite(addCredits) || addCredits <= 0) return;
+					if (!isUlid(id)) return;
 
 					const settings = await readSettings(ctx);
-					if (!validate(settings).ok) {
-						ctx.log.warn("[premiumcms-projects] credentials not configured — skipping provision");
-						return;
-					}
+					if (!validate(settings).ok) return;
 
-					const contentId = str((event.content as Record<string, unknown>).id);
-
-					let id: string;
 					try {
-						id = projectIdFromLabel(label);
-					} catch (err) {
-						// Invalid label — log and stop. We deliberately do not write back,
-						// so this save does not spawn another afterSave.
-						ctx.log.warn(
-							`[premiumcms-projects] ${err instanceof Error ? err.message : String(err)}`,
+						const rn = resourceName(id);
+						const d1Id = await findD1IdByName(ctx, credsOf(settings), `${rn}-db`);
+						if (!d1Id) {
+							ctx.log.warn(`[premiumcms-projects] add-credits: no D1 for ${id} (${rn}-db)`);
+							return;
+						}
+						const micros = Math.round(addCredits * 1_000_000);
+						await grantCredits(
+							ctx,
+							settings,
+							d1Id,
+							micros,
+							`operator:${id}:${Date.now()}`,
+							"Operator credit (parent admin)",
 						);
-						return;
+						// Clear the action input. This re-save carries add_credits=null.
+						await ctx.content.update(COLLECTION, id, { add_credits: null });
+					} catch (err) {
+						ctx.log.error(`[premiumcms-projects] operator top-up for ${id} failed`, err);
 					}
+				},
+			},
 
-					// Claim the row and seed the authoritative kv state.
-					await seedState(ctx, settings, {
-						id,
-						label,
-						theme: str(fields.theme),
-						ownerEmail: settings.ownerEmail,
-						contentId: contentId || null,
-					});
-					if (contentId) {
-						await ctx.content.update(COLLECTION, contentId, {
-							project_id: id,
-							provision_status: "creating",
-						});
+			/**
+			 * Teardown on delete. When a `projects` row is deleted, tear down every
+			 * Cloudflare resource named from its id (worker, custom domain, D1, KV,
+			 * R2 bucket) by deterministic name. Idempotent and best-effort — ignores
+			 * not-found and never throws out of the hook. The event carries only the
+			 * id (no data), which is all we need: names derive from it.
+			 */
+			"content:afterDelete": {
+				timeout: STEP_TIMEOUT_MS,
+				handler: async (event, ctx) => {
+					if (event.collection !== COLLECTION) return;
+					if (!isUlid(event.id)) return;
+					try {
+						const settings = await readSettings(ctx);
+						if (!validate(settings).ok) return;
+						const { removed, warnings } = await destroyProject(ctx, settings, event.id);
+						ctx.log.info(
+							`[premiumcms-projects] torn down ${event.id}: removed [${removed.join(", ")}]` +
+								(warnings.length ? ` warnings [${warnings.join("; ")}]` : ""),
+						);
+					} catch (err) {
+						ctx.log.error(`[premiumcms-projects] teardown for ${event.id} failed`, err);
 					}
-					// No provisioning here: afterSave runs inside the content-save
-					// request and has no subrequest budget for CF API calls. Claiming
-					// (above) is best-effort; the cron tick both claims and advances.
 				},
 			},
 		},
 
 		routes: {
 			/**
-			 * Provisioning tick — claims and advances projects one step. Requires
-			 * admin auth (the default for a plugin route); the instance's own
-			 * scheduled() handler drives it every minute with a stored admin token.
-			 * Each call is a fresh invocation, so provisioning has a full subrequest
-			 * budget — which afterSave (inside the save request) does not.
+			 * Provisioning tick — provisions ONE pending project per call. Public so
+			 * any instance's scheduled() handler can drive it via a SELF service
+			 * binding without minting a per-instance admin token: it only advances
+			 * projects an admin already queued (empty-`url` rows), is idempotent and
+			 * bounded to one project per call, and no-ops unless Cloudflare
+			 * credentials are configured — so a stray public trigger can at most run
+			 * the maintenance that runs every minute anyway. Each call is a fresh
+			 * invocation with a full subrequest budget (unlike afterSave). Metering
+			 * lives inside each child, so there is no parent-side billing pass.
 			 */
 			tick: {
+				public: true,
 				handler: async (ctx) => {
 					const prov = await runProvisionTick(ctx);
-					// Metering runs on the same per-minute tick; it self-throttles
-					// the (heavier) Cloudflare analytics sync per project.
-					const billing = await runBillingTick(ctx);
-					return { success: true, ...prov, ...billing };
+					return { success: true, ...prov };
 				},
 			},
 
@@ -403,20 +494,29 @@ export function createPlugin(): ResolvedPlugin {
 					};
 					const projectId = typeof body.projectId === "string" ? body.projectId : "";
 					const amount = Number(body.amount);
+					if (!projectId || !isUlid(projectId) || !Number.isFinite(amount) || amount <= 0) {
+						return {
+							success: false,
+							error: "A valid projectId and a positive amount are required.",
+						};
+					}
+					// Stateless: the child sends its own row id. Resolve its resources by
+					// name to confirm it is a real provisioned project, and read its label
+					// (for the line-item title) from the content row.
+					const rn = resourceName(projectId);
+					const d1Id = await findD1IdByName(ctx, credsOf(settings), `${rn}-db`);
+					if (!d1Id) return { success: false, error: "Unknown project." };
+					const row = ctx.content?.get ? await ctx.content.get(COLLECTION, projectId) : null;
+					const label = row ? str((row.data as Record<string, unknown>).label) : "";
 					const returnUrl =
 						typeof body.returnUrl === "string" && body.returnUrl
 							? body.returnUrl
-							: `https://${projectId}`;
-					if (!projectId || !Number.isFinite(amount) || amount <= 0) {
-						return { success: false, error: "projectId and a positive amount are required." };
-					}
-					const state = await getState(ctx, projectId);
-					if (!state) return { success: false, error: "Unknown project." };
+							: (row ? str((row.data as Record<string, unknown>).url) : "") || `https://${rn}`;
 					try {
 						const { url } = await createCheckout(ctx, settings, {
 							projectId,
-							email: state.owner_email,
-							title: state.label,
+							email: "",
+							title: label || projectId,
 							amountCents: Math.round(amount * 100),
 							returnUrl,
 						});
@@ -453,15 +553,17 @@ export function createPlugin(): ResolvedPlugin {
 					try {
 						const session = await retrieveCheckoutSession(ctx, settings, sessionId);
 						if (session.paymentStatus !== "paid") return { success: true, ignored: true };
-						if (!session.projectId || session.creditsMicros <= 0) {
+						if (!session.projectId || !isUlid(session.projectId) || session.creditsMicros <= 0) {
 							return { success: false, error: "Session is missing project/credits metadata." };
 						}
-						const state = await getState(ctx, session.projectId);
-						if (!state) return { success: false, error: "Unknown project." };
+						// Stateless: resolve the paying child's D1 by deterministic name.
+						const rn = resourceName(session.projectId);
+						const d1Id = await findD1IdByName(ctx, credsOf(settings), `${rn}-db`);
+						if (!d1Id) return { success: false, error: "Unknown project." };
 						await grantCredits(
 							ctx,
 							settings,
-							state,
+							d1Id,
 							session.creditsMicros,
 							`stripe:${session.id}`,
 							"Stripe top-up",
@@ -475,21 +577,91 @@ export function createPlugin(): ResolvedPlugin {
 				},
 			},
 
-			/** Provisioned projects (kv registry), for a custom admin screen. */
+			/**
+			 * Start the managed-frontend GitHub OAuth (redirect flow). The child's
+			 * Settings → General "Connect GitHub" button links here with the child's
+			 * `project` id and a `return` URL; both are stashed against the OAuth
+			 * state and the browser is redirected to GitHub. Public — redirect only.
+			 */
+			githubAuthStart: {
+				public: true,
+				handler: async (ctx) => {
+					const settings = await readSettings(ctx);
+					if (!settings.githubClientId) {
+						return { success: false, error: "GitHub is not configured on this platform." };
+					}
+					const url = new URL(ctx.request.url);
+					const project = url.searchParams.get("project") ?? "";
+					const ret = url.searchParams.get("return") ?? "";
+					if (!isUlid(project)) return { success: false, error: "A valid project is required." };
+					const state = `s_${crypto.randomUUID().replace(/-/g, "")}`;
+					await ctx.kv.set(`github:oauth:${state}`, JSON.stringify({ project, ret }));
+					const origin = (ctx.site?.url ?? "").replace(/\/$/, "");
+					const redirectUri = `${origin}/_emdash/api/plugins/premiumcms-projects/githubCallback`;
+					return { __redirect: authorizeUrl(settings, redirectUri, state) };
+				},
+			},
+
+			/**
+			 * GitHub OAuth callback: exchange the code for the customer's token, build
+			 * their site's static frontend (repo + Pages), flip the child worker's
+			 * proxy on, and redirect the browser back to the child admin. Public
+			 * (GitHub redirects here with ?code&state).
+			 */
+			githubCallback: {
+				public: true,
+				handler: async (ctx) => {
+					const settings = await readSettings(ctx);
+					const url = new URL(ctx.request.url);
+					const code = url.searchParams.get("code") ?? "";
+					const state = url.searchParams.get("state") ?? "";
+					const raw = state ? await ctx.kv.get<string>(`github:oauth:${state}`) : null;
+					if (!code || !raw) {
+						return { success: false, error: "Invalid or expired GitHub authorization." };
+					}
+					let project = "";
+					let ret = "";
+					try {
+						const parsed = JSON.parse(raw) as { project?: unknown; ret?: unknown };
+						project = typeof parsed.project === "string" ? parsed.project : "";
+						ret = typeof parsed.ret === "string" ? parsed.ret : "";
+					} catch {
+						// falls through to the invalid-project guard below
+					}
+					await ctx.kv.set(`github:oauth:${state}`, ""); // one-time use
+					if (!isUlid(project)) return { success: false, error: "Invalid project." };
+					const backBase = /^https:\/\//.test(ret) ? ret : (ctx.site?.url ?? "").replace(/\/$/, "");
+					const back = (status: string) =>
+						`${backBase}${backBase.includes("?") ? "&" : "?"}frontend=${status}`;
+
+					const token = await exchangeCode(ctx, settings, code);
+					if (!token) return { __redirect: back("error") };
+					const who = await whoami(ctx, token);
+					if (!who?.login) return { __redirect: back("error") };
+					try {
+						await enableFrontend(ctx, settings, project, token, who.login);
+						return { __redirect: back("connected") };
+					} catch (err) {
+						ctx.log.error(`[premiumcms-projects] enableFrontend for ${project} failed`, err);
+						return { __redirect: back("error") };
+					}
+				},
+			},
+
+			/**
+			 * Projects (from the content collection), for a custom admin screen. No
+			 * registry any more: a row's `url` being set is what "provisioned" means.
+			 */
 			projects: {
 				handler: async (ctx) => {
-					const states = await listStates(ctx);
+					const rows = await listProjectRows(ctx);
 					return {
-						projects: states.map((s) => ({
-							id: s.id,
-							label: s.label,
-							theme: s.theme,
-							hostname: s.hostname,
-							status: s.status,
-							error: s.error,
-							url: s.status === "live" ? `https://${s.hostname}` : null,
-							created_at: s.created_at,
-							updated_at: s.updated_at,
+						projects: rows.map((r) => ({
+							id: r.id,
+							label: str(r.data.label),
+							theme: str(r.data.theme),
+							url: str(r.data.url) || null,
+							provisioned: Boolean(str(r.data.url)),
 						})),
 					};
 				},

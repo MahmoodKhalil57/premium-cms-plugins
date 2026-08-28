@@ -133,6 +133,43 @@ export async function cfZoneId(ctx: PluginContext, creds: CfCreds, zone: string)
 }
 
 /**
+ * Look up a D1 database's uuid by its exact name (e.g. `${rn}-db`). Returns
+ * null when no database with that name exists. Used to resolve a child's
+ * database without any stored state — the name is derived from the row id.
+ */
+export async function findD1IdByName(
+	ctx: PluginContext,
+	creds: CfCreds,
+	name: string,
+): Promise<string | null> {
+	const list = await cfApi<Array<{ uuid: string; name: string }>>(
+		ctx,
+		creds,
+		"GET",
+		"/d1/database?per_page=100",
+	);
+	return list.result?.find((d) => d.name === name)?.uuid ?? null;
+}
+
+/**
+ * Look up a KV namespace's id by its exact title (e.g. `${rn}-session`).
+ * Returns null when none matches.
+ */
+export async function findKvIdByName(
+	ctx: PluginContext,
+	creds: CfCreds,
+	title: string,
+): Promise<string | null> {
+	const list = await cfApi<Array<{ id: string; title: string }>>(
+		ctx,
+		creds,
+		"GET",
+		"/storage/kv/namespaces?per_page=100",
+	);
+	return list.result?.find((n) => n.title === title)?.id ?? null;
+}
+
+/**
  * Run one SQL statement against a project's D1 database. The D1 query endpoint
  * executes a single statement per call, so callers split multi-statement work.
  */

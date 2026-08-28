@@ -1,12 +1,21 @@
 /**
- * Provisioning state machine: createResources → deployWorker → attachDomain →
- * bootstrapOwner, plus destroyProject. Idempotent and resumable — the whole
- * per-project state lives in ctx.kv under `state:project:<id>`, so `advance`
- * runs exactly one step per call and the cron hook drives it forward.
+ * Stateless provisioner: "provision and forget". Everything a child needs is
+ * named deterministically from the content row's id (a ULID), so nothing is
+ * stored on the parent side — the content row (its `url` field) is the only
+ * persistent state.
  *
- * Ported from the pre-reset provider's provisioner.ts, trimmed to the
- * Cloudflare + deploy-service surface (no SES / GitHub / routes / credits) and
- * re-pointed at plugin settings for credentials.
+ *   resourceName(id) = "p" + id.toLowerCase()   → the 27-char resource stem
+ *   worker script  = rn
+ *   D1 database    = `${rn}-db`
+ *   KV namespace   = `${rn}-session`
+ *   R2 bucket      = `${rn}-media`
+ *   hostname       = `${rn}.${zone}`
+ *
+ * `provisionAll` runs the whole pipeline (create/lookup resources → deploy →
+ * attach domain → seed credits → bootstrap owner → write the url back) in ONE
+ * invocation, driven by the tick (which has a full subrequest budget). Every
+ * step is idempotent (create-or-lookup, overwrite-on-deploy, tolerate
+ * "already"), so a failure just leaves `url` empty and the next tick retries.
  *
  * The golden bundle itself is uploaded by the trusted marketplace deploy
  * service; this plugin supplies the per-project bindings and the provider's
@@ -14,120 +23,49 @@
  */
 
 import type { PluginContext } from "@premium-cms/emdash/plugin";
-import { cfApi, cfZoneId, d1Query, deployService, resolveZone } from "./cf.js";
+import {
+	cfApi,
+	cfZoneId,
+	d1Query,
+	deployService,
+	findD1IdByName,
+	findKvIdByName,
+	resolveZone,
+} from "./cf.js";
+import { pushCreditsSettings, seedInitialCredits } from "./credits.js";
+import { COLLECTION } from "./content.js";
 import { credsOf, siteZone, type Settings } from "./settings.js";
 
-const NAME_RE = /^[a-z][a-z0-9-]{1,28}$/;
-const RESERVED = new Set([
-	"apex",
-	"www",
-	"mail",
-	"send",
-	"api",
-	"admin",
-	"platform",
-	"fallback",
-	"marketplace",
-	"master",
-]);
+/** ULID: 26 Crockford base32 chars (no I, L, O, U), case-insensitive. */
+const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
 
-const STATE_PREFIX = "state:project:";
+/** Deterministic resource stem for a content row id — `p` + lowercased ULID. */
+export function resourceName(contentId: string): string {
+	return `p${contentId.toLowerCase()}`;
+}
 
-export type ProjectStatus = "creating" | "resources" | "deployed" | "domain" | "live" | "error";
+/** Guard: the content id must look like a ULID before we name resources from it. */
+export function isUlid(id: string): boolean {
+	return typeof id === "string" && ULID_RE.test(id);
+}
 
-export interface ProjectState {
+const str = (v: unknown): string => (typeof v === "string" ? v : "");
+
+/**
+ * The transient, in-memory provisioning object. Lives only for the duration of
+ * one `provisionAll` call — there is no kv registry. The step functions fill in
+ * `d1_id` / `kv_id` / `bucket` as they go.
+ */
+export interface Provision {
 	id: string;
+	rn: string;
 	label: string;
 	theme: string;
-	hostname: string;
-	/** The Cloudflare zone the hostname sits under (resolved from the account). */
 	zone: string;
-	status: ProjectStatus;
-	error: string | null;
-	d1_id: string | null;
-	kv_id: string | null;
-	bucket: string | null;
-	owner_email: string;
-	/** Row id of the matching Projects-collection entry (mirror target). */
-	content_id?: string | null;
-	created_at: string;
-	updated_at: string;
-}
-
-/* ------------------------------------------------------------------ */
-/* id + kv-state helpers                                               */
-/* ------------------------------------------------------------------ */
-
-/** Slugify a human label into a project id, or throw with the reason. */
-export function projectIdFromLabel(label: string): string {
-	const id = label
-		.trim()
-		.toLowerCase()
-		.replace(/[^a-z0-9-]+/g, "-")
-		.replace(/^-+|-+$/g, "")
-		.replace(/-{2,}/g, "-");
-	if (!NAME_RE.test(id))
-		throw new Error(
-			`invalid project name "${id}" (2–29 chars, start with a letter, [a-z0-9-] only)`,
-		);
-	if (RESERVED.has(id)) throw new Error(`"${id}" is a reserved name`);
-	return id;
-}
-
-export async function getState(ctx: PluginContext, id: string): Promise<ProjectState | null> {
-	return ctx.kv.get<ProjectState>(`${STATE_PREFIX}${id}`);
-}
-
-export async function putState(ctx: PluginContext, state: ProjectState): Promise<ProjectState> {
-	state.updated_at = new Date().toISOString();
-	await ctx.kv.set(`${STATE_PREFIX}${state.id}`, state);
-	return state;
-}
-
-export async function listStates(ctx: PluginContext): Promise<ProjectState[]> {
-	const rows = await ctx.kv.list(STATE_PREFIX);
-	return rows
-		.map((r) => r.value as ProjectState)
-		.filter((s): s is ProjectState => Boolean(s && s.id));
-}
-
-export async function deleteState(ctx: PluginContext, id: string): Promise<void> {
-	await ctx.kv.delete(`${STATE_PREFIX}${id}`);
-}
-
-/** Seed the kv state for a brand-new project. Idempotent — returns the existing row if present. */
-export async function seedState(
-	ctx: PluginContext,
-	settings: Settings,
-	input: {
-		id: string;
-		label: string;
-		theme: string;
-		ownerEmail?: string;
-		contentId?: string | null;
-	},
-): Promise<ProjectState> {
-	const existing = await getState(ctx, input.id);
-	if (existing) return existing;
-	const zone = await resolveZone(ctx, credsOf(settings), siteZone(ctx));
-	const now = new Date().toISOString();
-	const state: ProjectState = {
-		id: input.id,
-		label: input.label.trim() || input.id,
-		theme: input.theme || "",
-		hostname: `${input.id}.${zone.name}`,
-		zone: zone.name,
-		status: "creating",
-		error: null,
-		d1_id: null,
-		kv_id: null,
-		bucket: null,
-		owner_email: (input.ownerEmail || settings.ownerEmail || "").trim(),
-		content_id: input.contentId ?? null,
-		created_at: now,
-		updated_at: now,
-	};
-	return putState(ctx, state);
+	hostname: string;
+	d1_id?: string;
+	kv_id?: string;
+	bucket?: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -135,11 +73,19 @@ export async function seedState(
 /* ------------------------------------------------------------------ */
 
 /**
- * The child Worker's binding set — mirrors the known-good apex instance.
- * Order is not significant to the deploy service, but the names are the
- * contract the golden bundle expects.
+ * The child Worker's binding set — mirrors the known-good apex instance. The
+ * names are the contract the golden bundle expects.
  */
-export function projectBindings(id: string, state: ProjectState, settings: Settings): unknown[] {
+export function projectBindings(
+	rn: string,
+	state: {
+		d1_id?: string | null;
+		kv_id?: string | null;
+		bucket?: string | null;
+		label: string;
+	},
+	settings: Settings,
+): unknown[] {
 	const bindings: unknown[] = [
 		{ type: "d1", name: "DB", id: state.d1_id },
 		{ type: "kv_namespace", name: "SESSION", namespace_id: state.kv_id },
@@ -148,6 +94,11 @@ export function projectBindings(id: string, state: ProjectState, settings: Setti
 		{ type: "worker_loader", name: "LOADER" },
 		{ type: "assets", name: "ASSETS" },
 		{ type: "send_email", name: "EMAIL" },
+		// Self service-binding: the instance's scheduled() handler loops back to
+		// its own (public) provisioning tick through this — a Worker's subrequest
+		// to its own custom domain does not reliably loop back. Present on every
+		// instance so any of them can act as a control plane once configured.
+		{ type: "service", name: "SELF", service: rn },
 	];
 	// Fallback email provider credentials, read by the theme's trusted
 	// fallback-email provider from env. Only when a fallback is configured.
@@ -163,109 +114,86 @@ export function projectBindings(id: string, state: ProjectState, settings: Setti
 }
 
 /* ------------------------------------------------------------------ */
-/* Steps                                                               */
+/* Steps (transient — no kv reads/writes)                              */
 /* ------------------------------------------------------------------ */
 
-/** CF: create (or reuse) the D1 database, KV namespace and R2 bucket. */
+/** CF: create (or look up, when they already exist) the D1 DB, KV namespace and R2 bucket. */
 export async function createResources(
 	ctx: PluginContext,
 	settings: Settings,
-	id: string,
-): Promise<ProjectState> {
-	const state = await getState(ctx, id);
-	if (!state) throw new Error("unknown project");
+	p: Provision,
+): Promise<Provision> {
 	const creds = credsOf(settings);
+	const dbName = `${p.rn}-db`;
+	const kvTitle = `${p.rn}-session`;
+	const bucketName = `${p.rn}-media`;
 
-	const d1 = await cfApi<{ uuid: string }>(ctx, creds, "POST", "/d1/database", {
-		name: `${id}-db`,
-	});
-	let d1Id: string | undefined = d1.result?.uuid;
+	const d1 = await cfApi<{ uuid: string }>(ctx, creds, "POST", "/d1/database", { name: dbName });
+	let d1Id: string | null = d1.result?.uuid ?? null;
 	if (!d1.success || !d1Id) {
-		const list = await cfApi<Array<{ uuid: string; name: string }>>(
-			ctx,
-			creds,
-			"GET",
-			"/d1/database?per_page=100",
-		);
-		d1Id = list.result?.find((d) => d.name === `${id}-db`)?.uuid;
+		d1Id = await findD1IdByName(ctx, creds, dbName);
 		if (!d1Id) throw new Error(`d1 create failed: ${JSON.stringify(d1.errors)}`);
 	}
 
 	const kv = await cfApi<{ id: string }>(ctx, creds, "POST", "/storage/kv/namespaces", {
-		title: `${id}-session`,
+		title: kvTitle,
 	});
-	let kvId: string | undefined = kv.result?.id;
+	let kvId: string | null = kv.result?.id ?? null;
 	if (!kv.success || !kvId) {
-		const list = await cfApi<Array<{ id: string; title: string }>>(
-			ctx,
-			creds,
-			"GET",
-			"/storage/kv/namespaces?per_page=100",
-		);
-		kvId = list.result?.find((n) => n.title === `${id}-session`)?.id;
+		kvId = await findKvIdByName(ctx, creds, kvTitle);
 		if (!kvId) throw new Error(`kv create failed: ${JSON.stringify(kv.errors)}`);
 	}
 
-	const r2 = await cfApi(ctx, creds, "POST", "/r2/buckets", { name: `${id}-media` });
+	const r2 = await cfApi(ctx, creds, "POST", "/r2/buckets", { name: bucketName });
 	if (!r2.success && !JSON.stringify(r2.errors).includes("already exists"))
 		throw new Error(`r2 create failed: ${JSON.stringify(r2.errors)}`);
 
-	state.d1_id = d1Id;
-	state.kv_id = kvId;
-	state.bucket = `${id}-media`;
-	state.status = "resources";
-	state.error = null;
-	return putState(ctx, state);
+	p.d1_id = d1Id;
+	p.kv_id = kvId;
+	p.bucket = bucketName;
+	return p;
 }
 
 /** Deploy service: upload the golden bundle for this project with its bindings. */
 export async function deployWorker(
 	ctx: PluginContext,
 	settings: Settings,
-	id: string,
-): Promise<ProjectState> {
-	const state = await getState(ctx, id);
-	if (!state) throw new Error("unknown project");
-	if (!state.d1_id || !state.kv_id) throw new Error("resources not created yet");
+	p: Provision,
+): Promise<Provision> {
+	if (!p.d1_id || !p.kv_id) throw new Error("resources not created yet");
 	await deployService(ctx, settings, "/api/v1/deploy", {
 		accountId: settings.cfAccountId,
 		apiToken: settings.cfApiToken,
-		script: id,
-		theme: state.theme,
+		script: p.rn,
+		theme: p.theme,
 		version: "latest",
-		bindings: projectBindings(id, state, settings),
+		bindings: projectBindings(p.rn, p, settings),
 		cron: "* * * * *",
 	});
-	state.status = "deployed";
-	state.error = null;
-	return putState(ctx, state);
+	return p;
 }
 
-/** CF: bind the assigned `<id>.<zone>` hostname to the project's Worker. */
+/** CF: bind the assigned `<rn>.<zone>` hostname to the project's Worker. */
 export async function attachDomain(
 	ctx: PluginContext,
 	settings: Settings,
-	id: string,
-): Promise<ProjectState> {
-	const state = await getState(ctx, id);
-	if (!state) throw new Error("unknown project");
+	p: Provision,
+): Promise<Provision> {
 	const creds = credsOf(settings);
 	const zoneId = await cfZoneId(
 		ctx,
 		creds,
-		state.zone || (await resolveZone(ctx, creds, siteZone(ctx))).name,
+		p.zone || (await resolveZone(ctx, creds, siteZone(ctx))).name,
 	);
 	const res = await cfApi(ctx, creds, "PUT", "/workers/domains", {
 		zone_id: zoneId,
-		hostname: state.hostname,
-		service: id,
+		hostname: p.hostname,
+		service: p.rn,
 		environment: "production",
 	});
 	if (!res.success && !JSON.stringify(res.errors).includes("already"))
 		throw new Error(`domain attach failed: ${JSON.stringify(res.errors)}`);
-	state.status = "domain";
-	state.error = null;
-	return putState(ctx, state);
+	return p;
 }
 
 /**
@@ -276,66 +204,116 @@ export async function attachDomain(
 export async function bootstrapOwner(
 	ctx: PluginContext,
 	settings: Settings,
-	id: string,
-): Promise<ProjectState> {
-	const state = await getState(ctx, id);
-	if (!state) throw new Error("unknown project");
-	if (!state.d1_id) throw new Error("d1 not created yet");
+	p: Provision,
+	ownerEmail: string,
+): Promise<Provision> {
+	if (!p.d1_id) throw new Error("d1 not created yet");
 	const creds = credsOf(settings);
 
 	// (a) Trigger first boot. Ignore the result — a cold worker may 5xx once.
 	try {
-		if (ctx.http) await ctx.http.fetch(`https://${state.hostname}/`, { method: "GET" });
+		if (ctx.http) await ctx.http.fetch(`https://${p.hostname}/`, { method: "GET" });
 	} catch {
-		// non-fatal — the D1 writes below create the tables' rows regardless
+		// non-fatal — the D1 writes below create the rows regardless
 	}
 
 	const now = new Date().toISOString();
-	const email = (state.owner_email || settings.ownerEmail || "").trim();
-	if (!email) throw new Error("no owner email — set ownerEmail in Settings or on the project row");
+	const email = (ownerEmail || settings.ownerEmail || "").trim();
+	if (!email) throw new Error("no owner email — set ownerEmail in Settings");
 	const userId = ulid();
 
-	// D1's query endpoint runs one statement per call, so these are two calls.
 	const insUser = await d1Query(
 		ctx,
 		creds,
-		state.d1_id,
+		p.d1_id,
 		"INSERT OR IGNORE INTO users (id,email,name,role,role_id,email_verified,disabled,created_at,updated_at) VALUES (?, ?, ?, 50, 'role:admin', 0, 0, ?, ?)",
-		[userId, email, state.label, now, now],
+		[userId, email, p.label, now, now],
 	);
 	if (!insUser.success) throw new Error(`owner insert failed: ${JSON.stringify(insUser.errors)}`);
 
 	const insOpt = await d1Query(
 		ctx,
 		creds,
-		state.d1_id,
+		p.d1_id,
 		"INSERT INTO options (name,value) VALUES ('emdash:setup_complete','true') ON CONFLICT(name) DO UPDATE SET value='true'",
 	);
 	if (!insOpt.success)
 		throw new Error(`setup-complete option failed: ${JSON.stringify(insOpt.errors)}`);
 
-	state.status = "live";
-	state.error = null;
-	return putState(ctx, state);
+	return p;
 }
 
+/* ------------------------------------------------------------------ */
+/* One-shot provisioning                                               */
+/* ------------------------------------------------------------------ */
+
 /**
- * Tear a project down: worker script, assigned domain(s), R2 bucket (via the
- * deploy service — unbounded object count), KV namespace, D1 database, the kv
- * state row, and the matching Projects-collection row. Best-effort: collects
- * removed/warnings rather than aborting on the first failure.
+ * Provision a single project end-to-end in one invocation. Returns the live
+ * URL, which the caller has already written back to the row (this function does
+ * the write itself, as step 6). Throws on any failure — the caller leaves the
+ * row's `url` empty so the next tick retries from scratch (every step is
+ * idempotent, so a retry converges).
+ */
+export async function provisionAll(
+	ctx: PluginContext,
+	settings: Settings,
+	row: { id: string; data: Record<string, unknown> },
+): Promise<string> {
+	const id = row.id;
+	if (!isUlid(id)) throw new Error(`content id "${id}" is not a ULID — cannot name resources`);
+	const rn = resourceName(id);
+	const zone = (await resolveZone(ctx, credsOf(settings), siteZone(ctx))).name;
+	const p: Provision = {
+		id,
+		rn,
+		label: str(row.data.label).trim() || id,
+		theme: str(row.data.theme),
+		zone,
+		hostname: `${rn}.${zone}`,
+	};
+
+	// 1. resources → 2. deploy → 3. domain
+	await createResources(ctx, settings, p);
+	await deployWorker(ctx, settings, p);
+	await attachDomain(ctx, settings, p);
+
+	// 4. seed the child's credits: price book / markup / enforcement / project
+	//    id / top-up target, then the initial balance.
+	if (!p.d1_id) throw new Error("d1 not created");
+	await pushCreditsSettings(ctx, settings, p.d1_id, id);
+	await seedInitialCredits(ctx, settings, p.d1_id, id, Number(row.data.starting_credits) || 0);
+
+	// 5. bootstrap the owner admin into the child instance.
+	const ownerEmail = str(row.data.owner_email) || settings.ownerEmail;
+	await bootstrapOwner(ctx, settings, p, ownerEmail);
+
+	// 6. write back ONLY the url (also the "already provisioned" marker).
+	const url = `https://${rn}.${zone}`;
+	if (ctx.content?.update) await ctx.content.update(COLLECTION, id, { url });
+	return url;
+}
+
+/* ------------------------------------------------------------------ */
+/* Teardown                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Tear a project down by deterministic name, derived from the row id. Idempotent
+ * and best-effort: ignores not-found, collects removed/warnings rather than
+ * aborting on the first failure. Order: custom domain(s) → worker → R2 bucket
+ * (via the deploy service — unbounded object count) → KV namespace → D1 database.
  */
 export async function destroyProject(
 	ctx: PluginContext,
 	settings: Settings,
 	id: string,
 ): Promise<{ removed: string[]; warnings: string[] }> {
-	const state = await getState(ctx, id);
-	if (!state) throw new Error("unknown project");
+	const rn = resourceName(id);
 	const creds = credsOf(settings);
 	const removed: string[] = [];
 	const warnings: string[] = [];
 
+	// Custom domain(s) bound to this worker (service === rn).
 	const wd = await cfApi<Array<{ id: string; hostname: string; service: string }>>(
 		ctx,
 		creds,
@@ -343,120 +321,47 @@ export async function destroyProject(
 		"/workers/domains",
 	);
 	for (const d of wd.result ?? []) {
-		if (d.service !== id) continue;
+		if (d.service !== rn) continue;
 		const r = await cfApi(ctx, creds, "DELETE", `/workers/domains/${d.id}`);
 		if (r.success) removed.push(`domain ${d.hostname}`);
 		else warnings.push(`domain ${d.hostname}: ${JSON.stringify(r.errors)}`);
 	}
 
-	const ws = await cfApi(ctx, creds, "DELETE", `/workers/scripts/${id}?force=true`);
+	// Worker script.
+	const ws = await cfApi(ctx, creds, "DELETE", `/workers/scripts/${rn}?force=true`);
 	if (ws.success) removed.push("worker");
 	else warnings.push(`worker: ${JSON.stringify(ws.errors)}`);
 
-	if (state.bucket) {
-		try {
-			const r = await deployService<{ purged?: number; deleted?: boolean }>(
-				ctx,
-				settings,
-				"/api/v1/destroy-bucket",
-				{
-					accountId: settings.cfAccountId,
-					apiToken: settings.cfApiToken,
-					bucket: state.bucket,
-				},
-			);
-			removed.push(
-				`R2 bucket${typeof r.purged === "number" ? ` (${r.purged} objects purged)` : ""}`,
-			);
-		} catch (err) {
-			warnings.push(`R2 bucket: ${err instanceof Error ? err.message : String(err)}`);
-		}
+	// R2 bucket (purge + delete via the deploy service — unbounded object count).
+	try {
+		const r = await deployService<{ purged?: number; deleted?: boolean }>(
+			ctx,
+			settings,
+			"/api/v1/destroy-bucket",
+			{ accountId: settings.cfAccountId, apiToken: settings.cfApiToken, bucket: `${rn}-media` },
+		);
+		removed.push(`R2 bucket${typeof r.purged === "number" ? ` (${r.purged} objects purged)` : ""}`);
+	} catch (err) {
+		warnings.push(`R2 bucket: ${err instanceof Error ? err.message : String(err)}`);
 	}
 
-	if (state.kv_id) {
-		const kv = await cfApi(ctx, creds, "DELETE", `/storage/kv/namespaces/${state.kv_id}`);
+	// KV namespace (name → id → delete).
+	const kvId = await findKvIdByName(ctx, creds, `${rn}-session`);
+	if (kvId) {
+		const kv = await cfApi(ctx, creds, "DELETE", `/storage/kv/namespaces/${kvId}`);
 		if (kv.success) removed.push("KV namespace");
 		else warnings.push(`KV: ${JSON.stringify(kv.errors)}`);
 	}
 
-	if (state.d1_id) {
-		const d1 = await cfApi(ctx, creds, "DELETE", `/d1/database/${state.d1_id}`);
+	// D1 database (name → id → delete).
+	const d1Id = await findD1IdByName(ctx, creds, `${rn}-db`);
+	if (d1Id) {
+		const d1 = await cfApi(ctx, creds, "DELETE", `/d1/database/${d1Id}`);
 		if (d1.success) removed.push("D1 database");
 		else warnings.push(`D1: ${JSON.stringify(d1.errors)}`);
 	}
 
-	// Remove the mirror row in the Projects collection, if we know it.
-	if (state.content_id && ctx.content?.delete) {
-		try {
-			await ctx.content.delete("projects", state.content_id);
-			removed.push("Projects row");
-		} catch (err) {
-			warnings.push(`Projects row: ${err instanceof Error ? err.message : String(err)}`);
-		}
-	}
-
-	await deleteState(ctx, id);
-	removed.push("state");
 	return { removed, warnings };
-}
-
-/* ------------------------------------------------------------------ */
-/* State machine                                                       */
-/* ------------------------------------------------------------------ */
-
-/**
- * Run the single next provisioning step for a project, based on its current
- * status, and persist the outcome. Errors are caught and recorded as
- * `status: "error"` with the message, but the project stays retryable — a
- * later call re-runs the same step. Returns the project's status after the
- * step (or "error").
- */
-export async function advance(
-	ctx: PluginContext,
-	settings: Settings,
-	id: string,
-): Promise<ProjectStatus> {
-	const state = await getState(ctx, id);
-	if (!state) throw new Error("unknown project");
-	// Terminal — nothing to do.
-	if (state.status === "live") return "live";
-
-	try {
-		switch (state.status) {
-			case "error":
-			case "creating": {
-				await createResources(ctx, settings, id);
-				return "resources";
-			}
-			case "resources": {
-				await deployWorker(ctx, settings, id);
-				return "deployed";
-			}
-			case "deployed": {
-				await attachDomain(ctx, settings, id);
-				return "domain";
-			}
-			case "domain": {
-				await bootstrapOwner(ctx, settings, id);
-				return "live";
-			}
-			default:
-				return state.status;
-		}
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		// Mark the row errored (cron skips it) but keep it retryable: every step
-		// is idempotent — createResources reuses existing D1/KV/R2, deployWorker
-		// re-deploys latest, attachDomain tolerates "already", bootstrapOwner uses
-		// INSERT OR IGNORE / upsert — so a retry restarts the pipeline from
-		// `creating` and idempotently walks back to where it was, one tick a step.
-		const fresh = (await getState(ctx, id)) ?? state;
-		fresh.error = `[${state.status}] ${message}`;
-		fresh.status = "error";
-		await putState(ctx, fresh);
-		ctx.log.error(`[premiumcms-projects] advance(${id}) failed at ${state.status}`, message);
-		return "error";
-	}
 }
 
 /* ------------------------------------------------------------------ */

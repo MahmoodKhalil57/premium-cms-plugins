@@ -1,16 +1,19 @@
 /**
- * Projects-collection mirror. The `projects` collection is created by a seed
- * elsewhere; this plugin only reads its rows and writes provisioning status
- * back. The authoritative registry is the kv state (state:project:<id>) — the
- * content row is a human-facing mirror, matched by its `project_id` field.
+ * Projects collection reader. The `projects` collection is created by a seed
+ * elsewhere; this plugin only reads its rows (to drive provisioning) and writes
+ * a single field back — `url`, the live URL of a provisioned instance, which is
+ * ALSO the "already provisioned" marker.
  *
- * Collection slug: "projects". Fields (all under ContentItem.data):
- *   label (string), theme (string), project_id (string), status (string),
- *   url (url).
+ * There is NO parent-side registry any more: every Cloudflare resource is named
+ * deterministically from the content row's id (a ULID), so the content row is
+ * the only persistent state. Fields (all under ContentItem.data):
+ *   label (string, required), theme (string, create-only),
+ *   starting_credits (number, create-only, dollars),
+ *   url (url, read-only — set by provisioning, and the provisioned marker),
+ *   add_credits (number, edit-only — operator grant in dollars, cleared on save).
  */
 
 import type { PluginContext } from "@premium-cms/emdash/plugin";
-import type { ProjectState } from "./provisioner.js";
 
 export const COLLECTION = "projects";
 
@@ -23,92 +26,22 @@ export function fieldsOf(row: unknown): Record<string, unknown> {
 	return {};
 }
 
-function str(v: unknown): string {
-	return typeof v === "string" ? v : "";
-}
-
 /**
- * Every Projects row not yet claimed (no `project_id`) that has a label.
- * The cron tick claims these — the `content:afterSave` hook cannot, because it
- * runs inside the content-save request and has no subrequest budget left.
+ * Every Projects row, as `{ id, data }`. The tick walks these: a row with an
+ * empty `url` and a `label` + `theme` is provisioned; a row whose `url` is set
+ * is already done and skipped. Paginates defensively (bounded pages).
  */
-export async function listUnclaimed(
+export async function listProjectRows(
 	ctx: PluginContext,
-): Promise<Array<{ contentId: string; label: string; theme: string }>> {
+): Promise<Array<{ id: string; data: Record<string, unknown> }>> {
 	if (!ctx.content) return [];
-	const out: Array<{ contentId: string; label: string; theme: string }> = [];
+	const out: Array<{ id: string; data: Record<string, unknown> }> = [];
 	let cursor: string | undefined;
 	for (let page = 0; page < 20; page++) {
 		const res = await ctx.content.list(COLLECTION, { limit: 100, cursor });
-		for (const item of res.items) {
-			const f = fieldsOf(item);
-			if (str(f.project_id)) continue;
-			const label = str(f.label);
-			if (!label) continue;
-			out.push({ contentId: item.id, label, theme: str(f.theme) });
-		}
+		for (const item of res.items) out.push({ id: item.id, data: fieldsOf(item) });
 		if (!res.hasMore || !res.cursor) break;
 		cursor = res.cursor;
 	}
 	return out;
-}
-
-/** Locate the Projects row whose `project_id` field matches, scanning pages. */
-export async function findRowByProjectId(ctx: PluginContext, id: string): Promise<string | null> {
-	if (!ctx.content) return null;
-	let cursor: string | undefined;
-	for (let page = 0; page < 20; page++) {
-		const res = await ctx.content.list(COLLECTION, { limit: 100, cursor });
-		for (const item of res.items) {
-			if (str(fieldsOf(item).project_id) === id) return item.id;
-		}
-		if (!res.hasMore || !res.cursor) break;
-		cursor = res.cursor;
-	}
-	return null;
-}
-
-/**
- * Mirror a project's status (and, when live, its URL) into its content row.
- * Resolves the row id from state.content_id, falling back to a project_id
- * scan. No-op when write access or the row is unavailable.
- */
-export async function mirrorState(ctx: PluginContext, state: ProjectState): Promise<void> {
-	if (!ctx.content?.update) return;
-	const rowId = state.content_id ?? (await findRowByProjectId(ctx, state.id));
-	if (!rowId) return;
-
-	const patch: Record<string, unknown> = {
-		project_id: state.id,
-		provision_status: state.status,
-	};
-	if (state.status === "live") patch.url = `https://${state.hostname}`;
-
-	try {
-		await ctx.content.update(COLLECTION, rowId, patch);
-	} catch (err) {
-		ctx.log.warn(`[premiumcms-projects] could not mirror status for ${state.id}`, err);
-	}
-}
-
-/**
- * Reflect a child's current credit balance (micro-dollars) into its Projects
- * row `credit_balance` field, in whole dollars, so operators see live balances
- * in the content list. No-op when the row or write access is unavailable.
- */
-export async function updateCreditBalance(
-	ctx: PluginContext,
-	projectId: string,
-	balanceMicros: number,
-): Promise<void> {
-	if (!ctx.content?.update) return;
-	const rowId = await findRowByProjectId(ctx, projectId);
-	if (!rowId) return;
-	try {
-		await ctx.content.update(COLLECTION, rowId, {
-			credit_balance: Math.round(balanceMicros) / 1_000_000,
-		});
-	} catch (err) {
-		ctx.log.warn(`[premiumcms-projects] could not update credit_balance for ${projectId}`, err);
-	}
 }

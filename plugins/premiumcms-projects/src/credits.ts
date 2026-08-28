@@ -1,21 +1,23 @@
 /**
- * Cost-plus credits + usage metering for provisioned child instances.
+ * Cost-plus credits for provisioned child instances.
  *
- * The parent (this plugin) owns the price book, the markup and the payment
- * keys. It meters each child's real Cloudflare running cost from CF's GraphQL
- * analytics and writes priced rows straight into the child's own billing
- * ledger (`_emdash_usage`, created by core migration 073) over the D1 API —
- * the same channel the provisioner uses. Credit top-ups land in the same
- * ledger as negative-charge rows, so the child's balance is `-SUM(charge)`.
+ * Metering now happens INSIDE each child (a core credits middleware prices the
+ * child's own Cloudflare usage against the price book seeded here). The parent
+ * (this plugin) only:
+ *   - seeds the child's `credits:*` options at provision time (price book,
+ *     markup, enforcement flag, top-up target, the child's own project id), and
+ *   - grants credits into the child's ledger (`_emdash_usage`, created by core
+ *     migration 073) over the D1 API — the initial balance, operator top-ups,
+ *     and Stripe purchases all land as negative-charge rows, so the child's
+ *     balance is `-SUM(charge_micros)`.
  *
- * Every child instance therefore holds its own bill; this file is the parent
- * side that fills it in and takes payment. Ported from the pre-reset provider,
- * adapted to plugin settings + ctx.http instead of a Worker env.
+ * Everything is addressed by the child's D1 uuid, resolved from the row id via
+ * `resourceName(id)` → `${rn}-db` → `findD1IdByName`. There is no parent-side
+ * state and no parent-side CF-analytics metering.
  */
 
 import type { PluginContext } from "@premium-cms/emdash/plugin";
-import { cfApi, d1Query, http, type CfResult } from "./cf.js";
-import type { ProjectState } from "./provisioner.js";
+import { d1Query, type CfResult } from "./cf.js";
 import { credsOf, type CfCreds, type Settings } from "./settings.js";
 
 /** Parent cost per unit in micro-dollars (1e-6 USD). */
@@ -37,7 +39,7 @@ export function priceBook(settings: Settings): { prices: Record<string, number>;
 
 /* ── child ledger access (over the D1 API) ─────────────────────────── */
 
-interface LedgerRow {
+export interface LedgerRow {
 	kind: string;
 	key: string;
 	quantity: number;
@@ -49,16 +51,16 @@ interface LedgerRow {
 }
 
 /** Append rows to a child's ledger; idempotent on `ref` (INSERT OR IGNORE). */
-async function childInsertUsage(
+export async function childInsertUsage(
 	ctx: PluginContext,
 	creds: CfCreds,
 	d1Id: string,
 	rows: LedgerRow[],
 ): Promise<number> {
 	if (rows.length === 0) return 0;
-	// One statement for all rows: a busy child produces many rows (metrics ×
-	// days) and a scheduled invocation has a small subrequest budget, so a
-	// per-row round-trip would exhaust it and the tick would be cancelled.
+	// One statement for all rows: a busy child produces many rows and a
+	// scheduled invocation has a small subrequest budget, so a per-row
+	// round-trip would exhaust it and the tick would be cancelled.
 	const tuple = "(?, datetime('now'), ?, ?, ?, ?, ?, ?, NULL, ?, 'parent', ?)";
 	const params: unknown[] = [];
 	for (const r of rows) {
@@ -82,7 +84,7 @@ async function childInsertUsage(
 }
 
 /** Upsert a single option into a child's `options` table. */
-async function childSetOption(
+export async function childSetOption(
 	ctx: PluginContext,
 	creds: CfCreds,
 	d1Id: string,
@@ -99,7 +101,7 @@ async function childSetOption(
 }
 
 /** Upsert several options in a single statement (fewer subrequests). */
-async function childSetOptions(
+export async function childSetOptions(
 	ctx: PluginContext,
 	creds: CfCreds,
 	d1Id: string,
@@ -132,43 +134,114 @@ export async function childBalanceMicros(
 }
 
 /**
- * Push the price book, markup, enforcement flag and top-up target into a child
- * (at provision time and whenever settings change). This is what makes the
- * child's own /billing + /immutable-log screens show the right numbers.
+ * The parent's credit-checkout URL for a child's "add credits" button.
+ */
+function billingCheckoutUrl(ctx: PluginContext): string {
+	return `${(ctx.site?.url ?? "").replace(/\/$/, "")}/_emdash/api/plugins/premiumcms-projects/billingCheckout`;
+}
+
+/**
+ * Seed the price book, markup, enforcement flag, currency and top-up target
+ * into a child's `options` table (at provision time). This is what makes the
+ * child's own credits middleware meter at the right prices and its "add
+ * credits" button reach back to the parent. `credits:project_id` (and the
+ * legacy `billing:project_id`) let the child send its own id back to the
+ * parent — the parent resolves the child's resources from that id alone.
+ *
+ * Does NOT touch `credits:balance_micros`; the balance is owned by grants
+ * (`seedInitialCredits` / `grantCredits`), so re-pushing settings never resets it.
  */
 export async function pushCreditsSettings(
 	ctx: PluginContext,
 	settings: Settings,
-	state: ProjectState,
+	d1Id: string,
+	id: string,
 ): Promise<void> {
-	if (!state.d1_id) return;
 	const creds = credsOf(settings);
 	const book = priceBook(settings);
-	const parentUrl = `${(ctx.site?.url ?? "").replace(/\/$/, "")}/_emdash/api/plugins/premiumcms-projects/billingCheckout`;
-	await childSetOptions(ctx, creds, state.d1_id, [
+	const checkoutUrl = billingCheckoutUrl(ctx);
+	// Per-write charge the child's self-metering middleware deducts on each
+	// content/media mutation: a representative write ≈ 1 request + 4 D1 rows
+	// written + 8 read, priced from the same book and markup.
+	const perWriteMicros = Math.round(
+		(book.prices["cf:request"] +
+			4 * book.prices["cf:d1_rows_written"] +
+			8 * book.prices["cf:d1_rows_read"]) *
+			book.markup,
+	);
+	const parentOrigin = (ctx.site?.url ?? "").replace(/\/$/, "");
+	await childSetOptions(ctx, creds, d1Id, [
 		["credits:prices", book.prices],
 		["credits:markup", book.markup],
+		["credits:price_per_write_micros", perWriteMicros],
 		["credits:enforce", settings.creditsEnforce],
-		["billing:parent_url", parentUrl],
-		["billing:project_id", state.id],
+		["credits:project_id", id],
+		["credits:topup_url", checkoutUrl],
+		["billing:parent_url", checkoutUrl],
+		["billing:project_id", id],
 		["billing:currency", "USD"],
+		// Managed static-frontend hosting: the child's Settings → General
+		// "Connect GitHub" button links here; the frontend stays disabled (a
+		// placeholder) until this OAuth flow enables it.
+		[
+			"frontend:connect_url",
+			`${parentOrigin}/_emdash/api/plugins/premiumcms-projects/githubAuthStart`,
+		],
 	]);
 }
 
-/** Add credits to a child (a top-up): a negative-charge ledger row. */
+/**
+ * Seed a child's INITIAL credit balance (in dollars) at provision time. Writes
+ * the balance option and, when positive, one negative-charge grant row keyed on
+ * `initial:<id>` (idempotent). Always sets `credits:balance_micros` — even to 0
+ * — so the child's enforcement middleware has a value to read.
+ */
+export async function seedInitialCredits(
+	ctx: PluginContext,
+	settings: Settings,
+	d1Id: string,
+	id: string,
+	dollars: number,
+): Promise<void> {
+	const creds = credsOf(settings);
+	const micros = Math.round((Number(dollars) || 0) * 1_000_000);
+	if (micros > 0) {
+		await childInsertUsage(ctx, creds, d1Id, [
+			{
+				kind: "credit",
+				key: "credit:initial",
+				quantity: 1,
+				costMicros: 0,
+				chargeMicros: -micros,
+				ref: `initial:${id}`,
+				day: new Date().toISOString().slice(0, 10),
+				meta: { note: "Initial credits" },
+			},
+		]);
+	}
+	const balance = await childBalanceMicros(ctx, creds, d1Id);
+	await childSetOption(ctx, creds, d1Id, "credits:balance_micros", balance);
+}
+
+/**
+ * Add credits to a child (a top-up): a negative-charge ledger row addressed by
+ * the child's D1 uuid. Idempotent on `ref` (a redelivered Stripe event or a
+ * repeated operator save does not double-credit). Refreshes the cached balance
+ * the enforcement middleware reads.
+ */
 export async function grantCredits(
 	ctx: PluginContext,
 	settings: Settings,
-	state: ProjectState,
+	d1Id: string,
 	micros: number,
 	ref: string,
 	note: string,
 	meta?: Record<string, unknown>,
 ): Promise<boolean> {
-	if (!state.d1_id) throw new Error("project has no database");
+	if (!d1Id) throw new Error("project has no database");
 	const creds = credsOf(settings);
 	const day = new Date().toISOString().slice(0, 10);
-	const n = await childInsertUsage(ctx, creds, state.d1_id, [
+	const n = await childInsertUsage(ctx, creds, d1Id, [
 		{
 			kind: "credit",
 			key: "credit:purchase",
@@ -180,225 +253,9 @@ export async function grantCredits(
 			meta: { note, ...(meta ?? {}) },
 		},
 	]);
-	// Refresh the cached balance the enforcement middleware reads.
-	const balance = await childBalanceMicros(ctx, creds, state.d1_id);
-	await childSetOption(ctx, creds, state.d1_id, "credits:balance_micros", balance);
+	const balance = await childBalanceMicros(ctx, creds, d1Id);
+	await childSetOption(ctx, creds, d1Id, "credits:balance_micros", balance);
 	return n > 0;
-}
-
-/* ── Cloudflare usage (GraphQL analytics, priced into the ledger) ───── */
-
-async function graphql<T>(
-	ctx: PluginContext,
-	creds: CfCreds,
-	query: string,
-	variables: Record<string, unknown>,
-): Promise<T> {
-	const res = await http(ctx, "https://api.cloudflare.com/client/v4/graphql", {
-		method: "POST",
-		headers: { Authorization: `Bearer ${creds.apiToken}`, "Content-Type": "application/json" },
-		body: JSON.stringify({ query, variables }),
-	});
-	const data = res.json<{
-		data?: { viewer?: { accounts?: T[] } };
-		errors?: Array<{ message: string }>;
-	}>();
-	if (!res.ok || data.errors?.length)
-		throw new Error(`analytics: ${data.errors?.[0]?.message ?? res.status}`);
-	return (data.data?.viewer?.accounts?.[0] ?? {}) as T;
-}
-
-const dayStr = (d: Date) => d.toISOString().slice(0, 10);
-
-/**
- * Pull a child's Cloudflare usage for the last `days` days, price it × markup,
- * and record it in the child's ledger (one row per resource per day,
- * idempotent). Today's rows carry the hour in their ref so the current day is
- * refreshed on each sync without duplicating. Updates the cached balance too.
- */
-export async function syncExternalUsage(
-	ctx: PluginContext,
-	settings: Settings,
-	state: ProjectState,
-	days = 30,
-): Promise<{ inserted: number; balanceMicros: number; detail?: string }> {
-	if (!state.d1_id) return { inserted: 0, balanceMicros: 0, detail: "no database" };
-	const creds = credsOf(settings);
-	const to = new Date();
-	const from = new Date(Date.now() - (days - 1) * 86_400_000);
-	const vars = { acct: creds.accountId, script: state.id, from: dayStr(from), to: dayStr(to) };
-	const book = priceBook(settings);
-	const price = (key: string, qty: number) => {
-		const cost = (book.prices[key] ?? 0) * qty;
-		return { costMicros: cost, chargeMicros: cost * book.markup };
-	};
-	const rows: LedgerRow[] = [];
-	const today = dayStr(to);
-	const hour = new Date().toISOString().slice(11, 13);
-	const refFor = (key: string, d: string) => (d === today ? `${key}:${d}:h${hour}` : `${key}:${d}`);
-	const errors: string[] = [];
-
-	try {
-		const w = await graphql<{
-			workersInvocationsAdaptive?: Array<{
-				dimensions: { date: string };
-				sum: { requests: number; subrequests: number; errors: number };
-				quantiles: { cpuTimeP50: number };
-			}>;
-		}>(
-			ctx,
-			creds,
-			"query($acct:String!,$script:String!,$from:Date!,$to:Date!){viewer{accounts(filter:{accountTag:$acct}){workersInvocationsAdaptive(limit:400,filter:{scriptName:$script,date_geq:$from,date_leq:$to}){dimensions{date}sum{requests subrequests errors}quantiles{cpuTimeP50}}}}}",
-			vars,
-		);
-		for (const g of w.workersInvocationsAdaptive ?? []) {
-			const d = g.dimensions.date;
-			rows.push({
-				kind: "external",
-				key: "cf:request",
-				quantity: g.sum.requests,
-				...price("cf:request", g.sum.requests),
-				ref: refFor("cf:request", d),
-				day: d,
-				meta: { subrequests: g.sum.subrequests, errors: g.sum.errors },
-			});
-			const cpuMs = (g.quantiles.cpuTimeP50 / 1000) * g.sum.requests;
-			rows.push({
-				kind: "external",
-				key: "cf:cpu_ms",
-				quantity: Math.round(cpuMs),
-				...price("cf:cpu_ms", cpuMs),
-				ref: refFor("cf:cpu_ms", d),
-				day: d,
-			});
-		}
-	} catch (err) {
-		errors.push(err instanceof Error ? err.message : String(err));
-	}
-
-	try {
-		const d1 = await graphql<{
-			d1AnalyticsAdaptiveGroups?: Array<{
-				dimensions: { date: string; databaseId: string };
-				sum: { rowsRead: number; rowsWritten: number };
-			}>;
-		}>(
-			ctx,
-			creds,
-			"query($acct:String!,$from:Date!,$to:Date!){viewer{accounts(filter:{accountTag:$acct}){d1AnalyticsAdaptiveGroups(limit:2000,filter:{date_geq:$from,date_leq:$to}){dimensions{date databaseId}sum{rowsRead rowsWritten}}}}}",
-			vars,
-		);
-		for (const g of d1.d1AnalyticsAdaptiveGroups ?? []) {
-			if (g.dimensions.databaseId !== state.d1_id) continue;
-			const d = g.dimensions.date;
-			rows.push({
-				kind: "external",
-				key: "cf:d1_rows_read",
-				quantity: g.sum.rowsRead,
-				...price("cf:d1_rows_read", g.sum.rowsRead),
-				ref: refFor("cf:d1_rows_read", d),
-				day: d,
-			});
-			rows.push({
-				kind: "external",
-				key: "cf:d1_rows_written",
-				quantity: g.sum.rowsWritten,
-				...price("cf:d1_rows_written", g.sum.rowsWritten),
-				ref: refFor("cf:d1_rows_written", d),
-				day: d,
-			});
-		}
-	} catch (err) {
-		errors.push(err instanceof Error ? err.message : String(err));
-	}
-
-	if (state.bucket) {
-		try {
-			const r2 = await graphql<{
-				r2OperationsAdaptiveGroups?: Array<{
-					dimensions: { date: string; bucketName: string; actionType: string };
-					sum: { requests: number };
-				}>;
-				r2StorageAdaptiveGroups?: Array<{
-					dimensions: { date: string; bucketName: string };
-					max: { payloadSize: number };
-				}>;
-			}>(
-				ctx,
-				creds,
-				"query($acct:String!,$from:Date!,$to:Date!){viewer{accounts(filter:{accountTag:$acct}){r2OperationsAdaptiveGroups(limit:2000,filter:{date_geq:$from,date_leq:$to}){dimensions{date bucketName actionType}sum{requests}} r2StorageAdaptiveGroups(limit:2000,filter:{date_geq:$from,date_leq:$to}){dimensions{date bucketName}max{payloadSize}}}}}",
-				vars,
-			);
-			const classA = new Set([
-				"PutObject",
-				"CopyObject",
-				"CompleteMultipartUpload",
-				"CreateMultipartUpload",
-				"UploadPart",
-				"ListObjects",
-				"PutBucket",
-				"DeleteObject",
-				"ListBuckets",
-			]);
-			const perDay = new Map<string, { a: number; b: number }>();
-			for (const g of r2.r2OperationsAdaptiveGroups ?? []) {
-				if (g.dimensions.bucketName !== state.bucket) continue;
-				const e = perDay.get(g.dimensions.date) ?? { a: 0, b: 0 };
-				if (classA.has(g.dimensions.actionType)) e.a += g.sum.requests;
-				else e.b += g.sum.requests;
-				perDay.set(g.dimensions.date, e);
-			}
-			for (const [d, e] of perDay) {
-				rows.push({
-					kind: "external",
-					key: "cf:r2_class_a",
-					quantity: e.a,
-					...price("cf:r2_class_a", e.a),
-					ref: refFor("cf:r2_class_a", d),
-					day: d,
-				});
-				rows.push({
-					kind: "external",
-					key: "cf:r2_class_b",
-					quantity: e.b,
-					...price("cf:r2_class_b", e.b),
-					ref: refFor("cf:r2_class_b", d),
-					day: d,
-				});
-			}
-			for (const g of r2.r2StorageAdaptiveGroups ?? []) {
-				if (g.dimensions.bucketName !== state.bucket) continue;
-				const gb = g.max.payloadSize / 1e9;
-				rows.push({
-					kind: "external",
-					key: "cf:r2_gb_day",
-					quantity: Number(gb.toFixed(4)),
-					...price("cf:r2_gb_day", gb),
-					ref: refFor("cf:r2_gb_day", g.dimensions.date),
-					day: g.dimensions.date,
-				});
-			}
-		} catch (err) {
-			errors.push(err instanceof Error ? err.message : String(err));
-		}
-	}
-
-	const inserted = await childInsertUsage(
-		ctx,
-		creds,
-		state.d1_id,
-		rows.filter((r) => r.quantity > 0),
-	);
-	const balance = await childBalanceMicros(ctx, creds, state.d1_id);
-	await childSetOptions(ctx, creds, state.d1_id, [
-		["credits:balance_micros", balance],
-		["credits:synced_at", new Date().toISOString()],
-	]);
-	return {
-		inserted,
-		balanceMicros: balance,
-		detail: errors.length ? errors.join("; ") : undefined,
-	};
 }
 
 // Keep CfResult referenced for downstream type-only consumers.
