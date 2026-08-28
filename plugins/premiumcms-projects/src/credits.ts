@@ -192,6 +192,9 @@ export async function pushCreditsSettings(
 			"custom_domain:api_url",
 			`${parentOrigin}/_emdash/api/plugins/premiumcms-projects/customDomain`,
 		],
+		// Base of this control plane's plugin routes, for child features that
+		// need the parent (plugin repo creation, …).
+		["platform:api_url", `${parentOrigin}/_emdash/api/plugins/premiumcms-projects`],
 		["custom_domain:default_url", defaultUrl],
 		// The child's own origin, as the runtime sees it (plugin ctx.site.url,
 		// outbound links, passkey rpId). The setup wizard would write this; a

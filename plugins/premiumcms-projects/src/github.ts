@@ -318,3 +318,55 @@ export async function syncTemplate(
 		? { ok: true, changed: files.length }
 		: { ok: false, changed: 0, error: push.error };
 }
+
+/* ── Repo metadata + raw files ─────────────────────────────────────── */
+
+/** Mark (or unmark) a repo as a GitHub template so others can generate from it. */
+export async function setTemplateRepo(
+	ctx: PluginContext,
+	token: string,
+	owner: string,
+	repo: string,
+	isTemplate: boolean,
+): Promise<{ ok: boolean; error?: string }> {
+	const r = await gh(ctx, token, "PATCH", `/repos/${owner}/${repo}`, { is_template: isTemplate });
+	return r.ok ? { ok: true } : { ok: false, error: `repo patch ${r.status}` };
+}
+
+/** Whether the token's user can push to `owner/repo` (owns it or is a collaborator with write). */
+export async function canPush(
+	ctx: PluginContext,
+	token: string,
+	owner: string,
+	repo: string,
+): Promise<boolean> {
+	const r = await gh(ctx, token, "GET", `/repos/${owner}/${repo}`);
+	if (!r.ok) return false;
+	const perms = r.json<{ permissions?: { push?: boolean; admin?: boolean } }>().permissions;
+	return Boolean(perms?.push || perms?.admin);
+}
+
+const B64_NEWLINES = /\n/g;
+const GIT_SUFFIX = /\.git$/;
+const REPO_URL = /^(?:https?:\/\/github\.com\/)?([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/?$/;
+
+/** A file from a repo's default branch (public repos need no token). */
+export async function fetchRepoFile(
+	ctx: PluginContext,
+	owner: string,
+	repo: string,
+	path: string,
+	token?: string,
+): Promise<string | null> {
+	const r = await gh(ctx, token ?? "", "GET", `/repos/${owner}/${repo}/contents/${path}`);
+	if (!r.ok) return null;
+	const d = r.json<{ content?: string; encoding?: string }>();
+	if (!d.content) return null;
+	return new TextDecoder().decode(fromB64(d.content.replace(B64_NEWLINES, "")));
+}
+
+/** Parse `https://github.com/owner/repo(.git)` (or `owner/repo`) → { owner, repo }. */
+export function parseRepoUrl(input: string): { owner: string; repo: string } | null {
+	const m = input.trim().replace(GIT_SUFFIX, "").match(REPO_URL);
+	return m ? { owner: m[1]!, repo: m[2]! } : null;
+}

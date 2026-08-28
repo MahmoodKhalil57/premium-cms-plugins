@@ -11,6 +11,8 @@
  *              update-on-conflict, via the child's reseed route
  *   frontend — sync the theme's frontend template repo into the child's site
  *              repo (template-owned paths only) and rebuild Pages
+ *   theme    — for projects marked "Is theme / demo": re-export their seed
+ *              into their repo and refresh the marketplace listing
  *
  * Children that are not control planes answer the cascade with `skipped`.
  */
@@ -22,8 +24,9 @@ import { dispatchRebuild, syncTemplate, templateForTheme } from "./github.js";
 import { childApi, platformToken } from "./platform.js";
 import { isUlid, projectBindings, resourceName } from "./provisioner.js";
 import { credsOf, type Settings } from "./settings.js";
+import { applyThemeSeed, publishTheme } from "./themes.js";
 
-export const ROLL_STEPS = ["bundle", "plugins", "seed", "frontend"] as const;
+export const ROLL_STEPS = ["bundle", "plugins", "seed", "frontend", "theme"] as const;
 export type RollStep = (typeof ROLL_STEPS)[number];
 
 export interface RollOptions {
@@ -76,7 +79,15 @@ async function rollOne(
 
 	for (const step of opts.steps) {
 		try {
-			out.steps[step] = await runStep(ctx, settings, step, { id, rn, label, theme, url, token });
+			out.steps[step] = await runStep(ctx, settings, step, {
+				id,
+				rn,
+				label,
+				theme,
+				url,
+				token,
+				row,
+			});
 		} catch (err) {
 			out.ok = false;
 			out.steps[step] = `error: ${err instanceof Error ? err.message : String(err)}`;
@@ -108,6 +119,7 @@ interface Target {
 	theme: string;
 	url: string;
 	token: string;
+	row: { id: string; data: Record<string, unknown> };
 }
 
 async function runStep(
@@ -122,14 +134,15 @@ async function runStep(
 		case "plugins":
 			return rollPlugins(ctx, t);
 		case "seed":
-			return rollSeed(ctx, t);
+			return rollSeed(ctx, settings, t);
 		case "frontend":
 			return rollFrontend(ctx, settings, t);
+		case "theme":
+			return rollTheme(ctx, settings, t);
 	}
 }
 
 async function rollBundle(ctx: PluginContext, settings: Settings, t: Target): Promise<string> {
-	if (!t.theme) throw new Error("no theme on the project row");
 	const creds = credsOf(settings);
 	const d1Id = await findD1IdByName(ctx, creds, `${t.rn}-db`);
 	const kvId = await findKvIdByName(ctx, creds, `${t.rn}-session`);
@@ -155,12 +168,12 @@ async function rollBundle(ctx: PluginContext, settings: Settings, t: Target): Pr
 		accountId: settings.cfAccountId,
 		apiToken: settings.cfApiToken,
 		script: t.rn,
-		theme: t.theme,
+		theme: settings.instanceBundle,
 		version: "latest",
 		bindings,
 		cron: "* * * * *",
 	});
-	return `deployed ${t.theme}@${res.version ?? "latest"}`;
+	return `deployed ${settings.instanceBundle}@${res.version ?? "latest"}`;
 }
 
 async function rollPlugins(ctx: PluginContext, t: Target): Promise<string> {
@@ -194,8 +207,14 @@ async function rollPlugins(ctx: PluginContext, t: Target): Promise<string> {
 	return `updated ${updated} of ${items.length}`;
 }
 
-async function rollSeed(ctx: PluginContext, t: Target): Promise<string> {
+async function rollSeed(ctx: PluginContext, settings: Settings, t: Target): Promise<string> {
 	if (!t.token) throw new Error("no platform token");
+	// A theme is a repo: its seed.json is the source of truth. Projects that
+	// are themselves themes are the source, not a copy — skip them.
+	if (t.theme && !t.row.data.is_theme) {
+		const applied = await applyThemeSeed(ctx, settings, t.id, t.url, t.theme);
+		if (applied) return applied;
+	}
 	const r = await childApi(ctx, t.url, t.token, "POST", "/_emdash/api/settings/reseed", {});
 	if (!r.ok) throw new Error(`reseed ${r.status}: ${r.text.slice(0, 120)}`);
 	const d = r.json<{ data?: Record<string, { created?: number; updated?: number }> }>().data ?? {};
@@ -215,4 +234,9 @@ async function rollFrontend(ctx: PluginContext, settings: Settings, t: Target): 
 	if (!sync.ok) throw new Error(sync.error || "template sync failed");
 	if (sync.changed > 0) await dispatchRebuild(ctx, gh, owner, repo);
 	return sync.changed > 0 ? `synced ${sync.changed} file(s), rebuilding` : "up to date";
+}
+
+async function rollTheme(ctx: PluginContext, settings: Settings, t: Target): Promise<string> {
+	if (!t.row.data.is_theme) return "skipped (not a theme)";
+	return publishTheme(ctx, settings, t.row);
 }

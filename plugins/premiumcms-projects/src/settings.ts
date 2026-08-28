@@ -58,6 +58,12 @@ export interface Settings {
 	githubFrontendTemplate: string;
 	/** The `custom-domains` KV namespace id the router worker reads (platform-level). */
 	customDomainsKvId: string;
+	/** Marketplace trusted-publisher token (registers projects as themes). */
+	marketplaceSeedToken: string;
+	/** GitHub template repo (owner/repo) new plugins are generated from. */
+	pluginTemplate: string;
+	/** The golden bundle every instance runs (themes are repos, not bundles). */
+	instanceBundle: string;
 	/**
 	 * Set up behind the scenes (not on the settings form) — the operator seeds
 	 * these on a platform instance; the site owner only enters credentials above.
@@ -132,6 +138,10 @@ export async function readSettings(ctx: PluginContext): Promise<Settings> {
 			githubInstallUrl: asString(map.githubInstallUrl).trim(),
 			githubFrontendTemplate: asString(map.githubFrontendTemplate).trim(),
 			customDomainsKvId: asString(map.customDomainsKvId).trim(),
+			marketplaceSeedToken: asString(map.marketplaceSeedToken).trim(),
+			pluginTemplate:
+				asString(map.pluginTemplate).trim() || "MahmoodKhalil57/premium-cms-plugin-template",
+			instanceBundle: asString(map.instanceBundle).trim() || "instance",
 			marketplaceUrl: (asString(map.marketplaceUrl).trim() || DEFAULT_MARKETPLACE_URL).replace(
 				/\/$/,
 				"",
@@ -158,6 +168,9 @@ export async function readSettings(ctx: PluginContext): Promise<Settings> {
 			githubInstallUrl: "",
 			githubFrontendTemplate: "",
 			customDomainsKvId: "",
+			marketplaceSeedToken: "",
+			pluginTemplate: "MahmoodKhalil57/premium-cms-plugin-template",
+			instanceBundle: "instance",
 			marketplaceUrl: DEFAULT_MARKETPLACE_URL,
 			ownerEmail: "",
 			deployKey: "",

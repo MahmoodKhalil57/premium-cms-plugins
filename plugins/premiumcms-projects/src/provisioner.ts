@@ -35,6 +35,7 @@ import {
 import { pushCreditsSettings, seedInitialCredits } from "./credits.js";
 import { COLLECTION } from "./content.js";
 import { mintPlatformToken } from "./platform.js";
+import { applyThemeSeed } from "./themes.js";
 import { credsOf, siteZone, type Settings } from "./settings.js";
 
 /** ULID: 26 Crockford base32 chars (no I, L, O, U), case-insensitive. */
@@ -166,7 +167,8 @@ export async function deployWorker(
 		accountId: settings.cfAccountId,
 		apiToken: settings.cfApiToken,
 		script: p.rn,
-		theme: p.theme,
+		// Every instance runs the same golden bundle; the theme is a repo + seed.
+		theme: settings.instanceBundle,
 		version: "latest",
 		bindings: projectBindings(p.rn, p, settings),
 		cron: "* * * * *",
@@ -292,8 +294,17 @@ export async function provisionAll(
 	const ownerEmail = str(row.data.owner_email) || settings.ownerEmail;
 	await bootstrapOwner(ctx, settings, p, ownerEmail);
 
-	// 6. write back ONLY the url (also the "already provisioned" marker).
+	// 6. the theme's seed (its repo's seed.json), best-effort: a missing or
+	//    unreachable seed leaves a blank site rather than a failed provision.
 	const url = `https://${rn}.${zone}`;
+	try {
+		const applied = await applyThemeSeed(ctx, settings, id, url, p.theme);
+		if (applied) ctx.log.info(`[premiumcms-projects] ${id}: ${applied}`);
+	} catch (err) {
+		ctx.log.warn(`[premiumcms-projects] ${id}: theme seed not applied`, err);
+	}
+
+	// 7. write back ONLY the url (also the "already provisioned" marker).
 	if (ctx.content?.update) await ctx.content.update(COLLECTION, id, { url });
 	return url;
 }

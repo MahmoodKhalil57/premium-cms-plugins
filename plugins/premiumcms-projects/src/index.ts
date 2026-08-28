@@ -49,14 +49,18 @@ import { grantCredits, pushCreditsSettings } from "./credits.js";
 import { checkoutSessionIdFromEvent, createCheckout, retrieveCheckoutSession } from "./stripe.js";
 import {
 	authorizeUrl,
+	canPush,
 	createFromTemplate,
 	dispatchRebuild,
 	enablePages,
 	exchangeCode,
+	parseRepoUrl,
 	setSecret,
 	templateForTheme,
 	whoami,
 } from "./github.js";
+import { authorToken, createPluginListing, listThemes } from "./marketplace.js";
+import { publishTheme, themeRepo } from "./themes.js";
 import { ROLL_STEPS, rollChildren, type RollStep } from "./roll.js";
 import { applyCanonicalUrl, applyPlatformDomain } from "./platform-domain.js";
 import {
@@ -192,9 +196,27 @@ const SETTINGS_SCHEMA: SettingsSchema = {
 	},
 	githubFrontendTemplate: {
 		type: "string",
-		label: "Frontend template repo (owner/repo)",
+		label: "Fallback frontend template repo (owner/repo)",
 		description:
-			"A GitHub template repo (the frontend-static tooling + a theme) that each project's static-frontend repo is generated from.",
+			"Used only when a theme has no repository on the marketplace: a GitHub template repo (the frontend-static tooling + a theme) a project's site repo is generated from. Plain owner/repo, or a JSON map by theme.",
+	},
+	pluginTemplate: {
+		type: "string",
+		label: "Plugin starter template (owner/repo)",
+		description:
+			"The GitHub template repo 'Create and fork plugin' generates new plugin repos from. It ships the publish workflow.",
+	},
+	instanceBundle: {
+		type: "string",
+		label: "Instance bundle",
+		description:
+			"The golden bundle every provisioned instance runs (themes are repos + seeds, not bundles). Default: instance.",
+	},
+	marketplaceSeedToken: {
+		type: "secret",
+		label: "Marketplace publisher token",
+		description:
+			"The marketplace's trusted-publisher token — lets this control plane register projects marked 'Is theme / demo' as marketplace themes.",
 	},
 };
 
@@ -285,10 +307,13 @@ async function enableFrontend(
 	const label = str(rowData.label);
 	const theme = str(rowData.theme) || "marketing";
 
-	// The frontend template is per-theme: an instance built from theme X copies
-	// theme X's static frontend.
-	const template = templateForTheme(settings.githubFrontendTemplate, theme);
-	if (!template) throw new Error(`no frontend template configured for theme "${theme}"`);
+	// A theme is a repo: the site repo is generated from the marketplace theme's
+	// repository. The settings map is only a fallback for themes without one.
+	const fromMarketplace = await themeRepo(ctx, settings, theme).catch(() => null);
+	const template = fromMarketplace
+		? `${fromMarketplace.owner}/${fromMarketplace.repo}`
+		: templateForTheme(settings.githubFrontendTemplate, theme);
+	if (!template) throw new Error(`theme "${theme}" has no repository to copy the frontend from`);
 
 	const gen = await createFromTemplate(ctx, token, template, owner, repo, label || project);
 	if (!gen.ok) throw new Error(gen.error || "repo create failed");
@@ -327,7 +352,7 @@ async function enableFrontend(
 		accountId: settings.cfAccountId,
 		apiToken: settings.cfApiToken,
 		script: rn,
-		theme,
+		theme: settings.instanceBundle,
 		version: "latest",
 		bindings,
 		cron: "* * * * *",
@@ -439,6 +464,19 @@ export function createPlugin(): ResolvedPlugin {
 							const message = err instanceof Error ? err.message : String(err);
 							ctx.log.error(`[premiumcms-projects] domain for ${id} rejected: ${message}`);
 							if (str(fields.domain)) await ctx.content.update(COLLECTION, id, { domain: null });
+						}
+					}
+
+					// "Is theme / demo": publish this project as a marketplace theme —
+					// its seed into its repo, the repo as a template, the listing.
+					if (fields.is_theme) {
+						try {
+							const done = await publishTheme(ctx, settings, { id, data: fields });
+							ctx.log.info(`[premiumcms-projects] theme ${id}: ${done}`);
+						} catch (err) {
+							ctx.log.warn(
+								`[premiumcms-projects] theme ${id} not published yet: ${err instanceof Error ? err.message : String(err)}`,
+							);
 						}
 					}
 
@@ -702,6 +740,111 @@ export function createPlugin(): ResolvedPlugin {
 			 * router KV + returns the records to add and the live status;
 			 * action=reset removes the hostname + mapping.
 			 */
+			/**
+			 * Options for the Projects form's "Copy from theme/demo" select: every
+			 * marketplace theme (each one a project published as a repo + seed).
+			 */
+			themeOptions: {
+				public: true,
+				cacheControl: "public, max-age=60",
+				handler: async (ctx) => {
+					const settings = await readSettings(ctx);
+					if (!settings.marketplaceUrl) return { options: [] };
+					const themes = await listThemes(ctx, settings);
+					return {
+						options: themes.map((t) => ({
+							value: t.id,
+							label: t.description ? `${t.name} — ${t.description}` : t.name,
+						})),
+					};
+				},
+			},
+
+			/**
+			 * Create a plugin as a git repo for a project owner: generate it from
+			 * the starter template into their connected GitHub account (or take an
+			 * existing repo they can push to), give it a marketplace publish token
+			 * as a repo secret, and register the listing. Every push to the repo
+			 * then releases a version through its own workflow.
+			 */
+			pluginFork: {
+				public: true,
+				handler: async (ctx) => {
+					const settings = await readSettings(ctx);
+					if (!validate(settings).ok)
+						return { success: false, error: "Plugins are not configured on this platform." };
+					const body = (ctx.input ?? {}) as {
+						project?: unknown;
+						id?: unknown;
+						name?: unknown;
+						description?: unknown;
+						repositoryUrl?: unknown;
+					};
+					const project = str(body.project);
+					if (!isUlid(project)) return { success: false, error: "A valid project is required." };
+					const id = str(body.id).trim().toLowerCase();
+					if (!/^[a-z][a-z0-9-]{1,63}$/.test(id))
+						return { success: false, error: "Plugin id: lowercase letters, numbers and hyphens." };
+					const name = str(body.name).trim() || id;
+					const gh = str(await ctx.kv.get(`github:token:${project}`));
+					const owner = str(await ctx.kv.get(`github:owner:${project}`));
+					if (!gh || !owner)
+						return { success: false, error: "Connect GitHub in Settings → General first." };
+
+					let repo: { owner: string; repo: string };
+					const linked = str(body.repositoryUrl).trim();
+					if (linked) {
+						const parsed = parseRepoUrl(linked);
+						if (!parsed)
+							return { success: false, error: "Repository must be a GitHub URL (owner/repo)." };
+						if (!(await canPush(ctx, gh, parsed.owner, parsed.repo)))
+							return {
+								success: false,
+								error: `Your GitHub account can't push to ${parsed.owner}/${parsed.repo}.`,
+							};
+						repo = parsed;
+					} else {
+						const gen = await createFromTemplate(
+							ctx,
+							gh,
+							settings.pluginTemplate,
+							owner,
+							`plugin-${id}`,
+							name,
+						);
+						if (!gen.ok)
+							return { success: false, error: gen.error || "Could not create the repo." };
+						repo = { owner, repo: `plugin-${id}` };
+					}
+
+					const token = await authorToken(ctx, settings, owner);
+					for (const [k, v] of [
+						["MARKETPLACE_URL", settings.marketplaceUrl],
+						["MARKETPLACE_TOKEN", token],
+						["PLUGIN_ID", id],
+					] as Array<[string, string]>) {
+						const r = await setSecret(ctx, gh, repo.owner, repo.repo, k, v);
+						if (!r.ok)
+							return { success: false, error: `Could not store ${k} on the repo: ${r.error}` };
+					}
+					const repositoryUrl = `https://github.com/${repo.owner}/${repo.repo}`;
+					const listing = await createPluginListing(ctx, settings, token, {
+						id,
+						name,
+						description: str(body.description).trim() || undefined,
+						repositoryUrl,
+					});
+					if (!listing.created && !linked) return { success: false, error: listing.error };
+					return {
+						success: true,
+						id,
+						repositoryUrl,
+						listed: listing.created,
+						note: listing.created ? undefined : listing.error,
+					};
+				},
+			},
+
 			customDomain: {
 				public: true,
 				handler: async (ctx) => {
